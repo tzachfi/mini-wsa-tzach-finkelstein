@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: miniwsa
+      POSTGRES_USER: miniwsa
+      POSTGRES_PASSWORD: miniwsa
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - miniwsa-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U miniwsa -d miniwsa"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - miniwsa
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    networks:
+      - miniwsa
+
+volumes:
+  miniwsa-postgres:
+
+networks:
+  miniwsa:
