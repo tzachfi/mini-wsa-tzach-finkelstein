@@ -5,7 +5,7 @@ spring:
   application:
     name: mini-wsa
   datasource:
-    url: jdbc:postgresql://localhost:5432/miniwsa
+    url: jdbc:postgresql://localhost:5432/miniwsa?reWriteBatchedInserts=true
     username: miniwsa
     password: miniwsa
   jpa:
@@ -17,6 +17,9 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+          batch_size: 50
+        order_inserts: true
+        order_updates: true
   jackson:
     serialization:
       write-dates-as-timestamps: false
