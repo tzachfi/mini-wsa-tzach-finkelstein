@@ -59,7 +59,49 @@ Swagger UI: [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagge
 
 OpenAPI JSON: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-docs)
 
-cURL examples will be added as each milestone lands (`v0.1-ingestion` onward).
+### Ingest — `POST /v1/events/ingest`
+
+Accepts a single event object or an array of events. Always returns **201** with a JSON **array** of stored events (a single ingest is `[one]`). The server sets `receivedAt` and ignores client-supplied `receivedAt` / enrichment fields. `attackType` and `threatScore` are null until v0.2.
+
+Validation failures return **400** RFC 7807 Problem Details. Duplicate `eventId` returns **409**.
+
+Single event:
+
+```bash
+curl -sS -X POST http://localhost:8080/v1/events/ingest \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "eventId": "evt-00132",
+    "timestamp": "2026-05-20T14:32:10Z",
+    "configId": 14227,
+    "policyId": "pol_web1",
+    "clientIp": "203.0.113.42",
+    "hostname": "www.example.com",
+    "path": "/api/v1/login",
+    "method": "POST",
+    "statusCode": 403,
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "rule": {
+      "id": "950001",
+      "name": "SQL_INJECTION",
+      "message": "SQL Injection Attack Detected",
+      "severity": "CRITICAL",
+      "category": "INJECTION"
+    },
+    "action": "DENY",
+    "geoLocation": { "country": "CN", "city": "Beijing" },
+    "requestSize": 1024,
+    "responseSize": 256
+  }'
+```
+
+Batch:
+
+```bash
+curl -sS -X POST http://localhost:8080/v1/events/ingest \
+  -H 'Content-Type: application/json' \
+  -d '[{ "eventId": "evt-00133", "timestamp": "2026-05-20T14:32:10Z", "configId": 14227, "clientIp": "203.0.113.42", "path": "/login", "rule": { "severity": "HIGH", "category": "BOT" }, "action": "ALERT" }]'
+```
 
 ## Architecture
 
