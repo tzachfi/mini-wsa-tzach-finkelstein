@@ -20,6 +20,10 @@ Context: coordinated campaign **Operation Shadow Flood** (SQL injection probes, 
 - Maven 3.9+ (or the included `./mvnw` wrapper)
 - Docker Desktop (for `docker compose up`)
 
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs `./mvnw -B verify` on pull requests targeting `main` / `master`.
+
 ## How to build & run
 
 ### Local (Maven + Postgres)
