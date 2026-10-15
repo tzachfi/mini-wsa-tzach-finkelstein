@@ -2,12 +2,18 @@ package com.akamai.miniwsa.service;
 
 import com.akamai.miniwsa.dto.EventIngestRequest;
 import com.akamai.miniwsa.dto.EventResponse;
+import com.akamai.miniwsa.enrichment.AttackTypeClassifier;
+import com.akamai.miniwsa.enrichment.RepeatWindowCounter;
+import com.akamai.miniwsa.enrichment.ThreatScoreCalculator;
 import com.akamai.miniwsa.model.GeoLocationEmbeddable;
 import com.akamai.miniwsa.model.RuleEmbeddable;
 import com.akamai.miniwsa.model.SecurityEvent;
 import com.akamai.miniwsa.repository.SecurityEventRepository;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -19,14 +25,56 @@ import org.springframework.transaction.annotation.Transactional;
 public class SecurityEventService {
 
     private final SecurityEventRepository securityEventRepository;
+    private final AttackTypeClassifier attackTypeClassifier;
+    private final ThreatScoreCalculator threatScoreCalculator;
+    private final RepeatWindowCounter repeatWindowCounter;
 
     @Transactional
     public List<EventResponse> ingest(List<EventIngestRequest> requests) {
         var receivedAt = Instant.now();
         var entities = requests.stream().map(request -> toEntity(request, receivedAt)).toList();
+        enrich(entities);
         var saved = securityEventRepository.saveAll(entities);
         log.info("Ingested {} security event(s)", saved.size());
         return saved.stream().map(this::toResponse).toList();
+    }
+
+    private void enrich(List<SecurityEvent> events) {
+        if (events.isEmpty()) {
+            return;
+        }
+
+        var eventsByIp = events.stream().collect(Collectors.groupingBy(SecurityEvent::getClientIp));
+        Instant globalFrom = null;
+        Instant globalTo = null;
+        for (var ipEvents : eventsByIp.values()) {
+            var minTs = ipEvents.stream().map(SecurityEvent::getTimestamp).min(Instant::compareTo).orElseThrow();
+            var maxTs = ipEvents.stream().map(SecurityEvent::getTimestamp).max(Instant::compareTo).orElseThrow();
+            var from = minTs.minus(RepeatWindowCounter.REPEAT_WINDOW);
+            if (globalFrom == null || from.isBefore(globalFrom)) {
+                globalFrom = from;
+            }
+            if (globalTo == null || maxTs.isAfter(globalTo)) {
+                globalTo = maxTs;
+            }
+        }
+
+        var history = new HashMap<String, List<Instant>>();
+        for (var row : securityEventRepository.findTimestampsInRange(
+                eventsByIp.keySet(), globalFrom, globalTo)) {
+            var ip = (String) row[0];
+            var ts = (Instant) row[1];
+            history.computeIfAbsent(ip, ignored -> new ArrayList<>()).add(ts);
+        }
+
+        var priors = repeatWindowCounter.priorCounts(events, history);
+        for (var i = 0; i < events.size(); i++) {
+            var event = events.get(i);
+            var rule = event.getRule();
+            event.setAttackType(attackTypeClassifier.classify(rule.getCategory()));
+            event.setThreatScore(threatScoreCalculator.calculate(
+                    rule.getSeverity(), event.getAction(), event.getPath(), priors[i]));
+        }
     }
 
     private SecurityEvent toEntity(EventIngestRequest request, Instant receivedAt) {

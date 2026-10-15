@@ -92,10 +92,9 @@ public class SecurityEvent {
     @Column(name = "received_at", nullable = false)
     private Instant receivedAt;
 
-    // Nullable until enrichment lands (TDD gates); then set nullable = false
-    @Column(name = "attack_type")
+    @Column(name = "attack_type", nullable = false)
     private String attackType;
 
-    @Column(name = "threat_score")
+    @Column(name = "threat_score", nullable = false)
     private Integer threatScore;
 }
