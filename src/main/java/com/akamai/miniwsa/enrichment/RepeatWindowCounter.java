@@ -15,8 +15,9 @@ import org.springframework.stereotype.Component;
  *
  * <p>Priors are DB history timestamps in the window plus earlier siblings in the same events list
  * that also fall in the window. Counting uses a stable timestamp sort; the returned {@code long[]}
- * stays index-aligned with the original list. The repeat-offender bonus threshold lives on
- * {@link ThreatScoreCalculator}, not here.
+ * stays index-aligned with the original list. History lists (and the in-batch sibling lists built
+ * here) must be sorted ascending so {@link #countInWindow} can binary-search. The repeat-offender
+ * bonus threshold lives on {@link ThreatScoreCalculator}, not here.
  */
 @Component
 public class RepeatWindowCounter {
@@ -52,9 +53,36 @@ public class RepeatWindowCounter {
         return priors;
     }
 
-    private static long countInWindow(List<Instant> timestamps, Instant windowStart, Instant windowEnd) {
-        return timestamps.stream()
-                .filter(ts -> !ts.isBefore(windowStart) && !ts.isAfter(windowEnd))
-                .count();
+    /** Inclusive count of {@code [from, to]} over a list sorted ascending by timestamp. */
+    private static long countInWindow(List<Instant> sorted, Instant from, Instant to) {
+        return firstIndexAfter(sorted, to) - firstIndexAtOrAfter(sorted, from);
+    }
+
+    private static int firstIndexAtOrAfter(List<Instant> sorted, Instant t) {
+        int lo = 0;
+        int hi = sorted.size();
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (sorted.get(mid).isBefore(t)) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    private static int firstIndexAfter(List<Instant> sorted, Instant t) {
+        int lo = 0;
+        int hi = sorted.size();
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (!sorted.get(mid).isAfter(t)) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
     }
 }

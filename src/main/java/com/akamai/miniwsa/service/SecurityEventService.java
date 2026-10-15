@@ -10,6 +10,7 @@ import com.akamai.miniwsa.model.RuleEmbeddable;
 import com.akamai.miniwsa.model.SecurityEvent;
 import com.akamai.miniwsa.repository.SecurityEventRepository;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -43,17 +44,27 @@ public class SecurityEventService {
             return;
         }
 
-        var history = new HashMap<String, List<Instant>>();
         var eventsByIp = events.stream().collect(Collectors.groupingBy(SecurityEvent::getClientIp));
-        for (var entry : eventsByIp.entrySet()) {
-            var ip = entry.getKey();
-            var ipEvents = entry.getValue();
+        Instant globalFrom = null;
+        Instant globalTo = null;
+        for (var ipEvents : eventsByIp.values()) {
             var minTs = ipEvents.stream().map(SecurityEvent::getTimestamp).min(Instant::compareTo).orElseThrow();
             var maxTs = ipEvents.stream().map(SecurityEvent::getTimestamp).max(Instant::compareTo).orElseThrow();
-            history.put(
-                    ip,
-                    securityEventRepository.findTimestampsInRange(
-                            ip, minTs.minus(RepeatWindowCounter.REPEAT_WINDOW), maxTs));
+            var from = minTs.minus(RepeatWindowCounter.REPEAT_WINDOW);
+            if (globalFrom == null || from.isBefore(globalFrom)) {
+                globalFrom = from;
+            }
+            if (globalTo == null || maxTs.isAfter(globalTo)) {
+                globalTo = maxTs;
+            }
+        }
+
+        var history = new HashMap<String, List<Instant>>();
+        for (var row : securityEventRepository.findTimestampsInRange(
+                eventsByIp.keySet(), globalFrom, globalTo)) {
+            var ip = (String) row[0];
+            var ts = (Instant) row[1];
+            history.computeIfAbsent(ip, ignored -> new ArrayList<>()).add(ts);
         }
 
         var priors = repeatWindowCounter.priorCounts(events, history);

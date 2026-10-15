@@ -128,7 +128,7 @@ Every ingested event is classified and scored before persist. `attackType` is a 
 - Path bonus: path contains `/admin` or `/login` → +15
 - Repeat-offender bonus: +15 when `priorEventCount + 1 > 5` (more than 5 events from the same `clientIp` in the window)
 
-The repeat window is inclusive `[timestamp − 10 minutes, timestamp]`. Priors are stored rows for that IP plus **earlier siblings in the same batch** (stable-sorted by timestamp; response order stays the request order). Ingest fetches timestamps once per distinct IP over `[minTs − 10m, maxTs]`.
+The repeat window is inclusive `[timestamp − 10 minutes, timestamp]`. Priors are stored rows for that IP plus **earlier siblings in the same batch** (stable-sorted by timestamp; response order stays the request order). Ingest loads history in **one** query for the batch’s distinct IPs over the union of `[minTs − 10m, maxTs]`, ordered by IP then timestamp, and binary-searches each window in memory. A Redis/stream-state sliding window remains a later scale-up option.
 
 Scores are capped at 100 (`Math.min(100, raw)`). Today's formula max is 90 (CRITICAL + DENY + path + repeat); 100 is reserved for later bonuses.
 
