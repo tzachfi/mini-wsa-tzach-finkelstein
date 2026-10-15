@@ -37,11 +37,19 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)
-    ProblemDetail handleDuplicate(DataIntegrityViolationException ex) {
-        log.debug("Data integrity violation on ingest", ex);
+    ProblemDetail handleIntegrity(DataIntegrityViolationException ex) {
+        if (ex.getCause() instanceof org.hibernate.exception.ConstraintViolationException cve
+                && cve.getConstraintName() != null
+                && cve.getConstraintName().toLowerCase().contains("event_id")) {
+            var problem = ProblemDetail.forStatusAndDetail(
+                    HttpStatus.CONFLICT, "An event with this eventId already exists");
+            problem.setTitle("Conflict");
+            return problem;
+        }
+        log.warn("Data integrity violation", ex);
         var problem = ProblemDetail.forStatusAndDetail(
-                HttpStatus.CONFLICT, "An event with this eventId already exists");
-        problem.setTitle("Conflict");
+                HttpStatus.BAD_REQUEST, "Event violates a storage constraint");
+        problem.setTitle("Bad Request");
         return problem;
     }
 }

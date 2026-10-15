@@ -6,6 +6,7 @@ import com.akamai.miniwsa.model.Severity;
 import java.time.Instant;
 
 public record EventResponse(
+        Long id,
         String eventId,
         Instant timestamp,
         Integer configId,

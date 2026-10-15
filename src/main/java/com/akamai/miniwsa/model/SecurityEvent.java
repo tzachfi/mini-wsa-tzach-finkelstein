@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.SequenceGenerator;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -21,6 +22,7 @@ import lombok.Setter;
 @Entity
 @Table(
         name = "security_events",
+        uniqueConstraints = @UniqueConstraint(name = "uk_se_event_id", columnNames = "event_id"),
         indexes = {
             // stats + samples + timeseries, when configId is given
             @Index(name = "idx_se_config_ts", columnList = "config_id, event_timestamp, id"),
@@ -43,7 +45,7 @@ public class SecurityEvent {
     @SequenceGenerator(name = "security_event_seq", sequenceName = "security_event_seq", allocationSize = 50)
     private Long id;
 
-    @Column(name = "event_id", nullable = false, unique = true)
+    @Column(name = "event_id", nullable = false)
     private String eventId;
 
     @Column(name = "event_timestamp", nullable = false)

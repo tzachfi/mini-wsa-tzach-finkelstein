@@ -87,6 +87,36 @@ class EventIngestApiTest {
                 .andExpect(jsonPath("$.errors[0].field").value("[0].clientIp"));
     }
 
+    @Test
+    void ingestOversizedPathReturns400WithFieldError() throws Exception {
+        var oversizedPath = "/x".repeat(1025); // 2050 chars > 2048
+        var body = eventJson("evt-oversized-path-001").replace("/api/v1/login", oversizedPath);
+
+        mockMvc.perform(post(INGEST_URL).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.title").value("Bad Request"))
+                .andExpect(jsonPath("$.detail").value("Validation failed"))
+                .andExpect(jsonPath("$.errors").isArray())
+                .andExpect(jsonPath("$.errors[0].field").value("[0].path"));
+    }
+
+    @Test
+    void ingestDuplicateEventIdReturns409Conflict() throws Exception {
+        mockMvc.perform(post(INGEST_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(eventJson("evt-dup-001")))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post(INGEST_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(eventJson("evt-dup-001")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.title").value("Conflict"))
+                .andExpect(jsonPath("$.detail").value("An event with this eventId already exists"));
+    }
+
     private static String eventJson(String eventId) {
         return """
                 {
