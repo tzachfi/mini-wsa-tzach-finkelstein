@@ -6,11 +6,15 @@ import com.akamai.miniwsa.exception.EventValidationException;
 import com.akamai.miniwsa.exception.InvalidRequestShapeException;
 import com.akamai.miniwsa.service.SecurityEventService;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import jakarta.validation.Validator;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -48,15 +52,44 @@ public class EventController {
             }
             return List.of(objectMapper.convertValue(body, EventIngestRequest.class));
         } catch (IllegalArgumentException ex) {
+            if (ex.getCause() instanceof JsonMappingException jme) {
+                var field = jme.getPath().stream()
+                        .map(r -> r.getIndex() >= 0 ? "[" + r.getIndex() + "]" : "." + r.getFieldName())
+                        .collect(Collectors.joining())
+                        .replaceFirst("^\\.", "");
+                if (!body.isArray()) {
+                    field = "[0]." + field;
+                }
+                throw new EventValidationException(
+                        "Validation failed",
+                        List.of(new EventValidationException.FieldError(field, mappingMessage(jme))));
+            }
             throw new InvalidRequestShapeException("Invalid event payload", ex);
         }
+    }
+
+    private static String mappingMessage(JsonMappingException jme) {
+        if (jme instanceof InvalidFormatException ife
+                && ife.getTargetType() != null
+                && ife.getTargetType().isEnum()) {
+            var allowed = Arrays.stream(ife.getTargetType().getEnumConstants())
+                    .map(Object::toString)
+                    .collect(Collectors.joining(", ", "[", "]"));
+            return "must be one of " + allowed;
+        }
+        return jme.getOriginalMessage();
     }
 
     private void validate(List<EventIngestRequest> requests) {
         var errors = new ArrayList<EventValidationException.FieldError>();
         for (var i = 0; i < requests.size(); i++) {
+            var event = requests.get(i);
+            if (event == null) {
+                errors.add(new EventValidationException.FieldError("[" + i + "]", "must not be null"));
+                continue;
+            }
             var index = i;
-            validator.validate(requests.get(i)).forEach(violation -> errors.add(
+            validator.validate(event).forEach(violation -> errors.add(
                     new EventValidationException.FieldError(
                             "[" + index + "]." + violation.getPropertyPath(), violation.getMessage())));
         }

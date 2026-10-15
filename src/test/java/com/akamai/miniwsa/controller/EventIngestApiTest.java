@@ -102,6 +102,87 @@ class EventIngestApiTest {
     }
 
     @Test
+    void ingestInvalidActionEnumReturns400WithFieldError() throws Exception {
+        var body = eventJson("evt-bad-action-001").replace("\"DENY\"", "\"BLOCK\"");
+
+        mockMvc.perform(post(INGEST_URL).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.title").value("Bad Request"))
+                .andExpect(jsonPath("$.detail").value("Validation failed"))
+                .andExpect(jsonPath("$.errors").isArray())
+                .andExpect(jsonPath("$.errors[0].field").value("[0].action"))
+                .andExpect(jsonPath("$.errors[0].message").value("must be one of [DENY, ALERT, MONITOR]"));
+    }
+
+    @Test
+    void ingestInvalidCategoryInBatchReturns400WithArrayIndex() throws Exception {
+        var badEvent = eventJson("evt-bad-category-001").replace("\"INJECTION\"", "\"FOO\"");
+        var body =
+                """
+                [
+                  %s,
+                  %s
+                ]
+                """
+                        .formatted(eventJson("evt-batch-ok-001"), badEvent);
+
+        mockMvc.perform(post(INGEST_URL).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.detail").value("Validation failed"))
+                .andExpect(jsonPath("$.errors").isArray())
+                .andExpect(jsonPath("$.errors[0].field").value("[1].rule.category"))
+                .andExpect(jsonPath("$.errors[0].message")
+                        .value(
+                                "must be one of [INJECTION, XSS, PROTOCOL_VIOLATION, DATA_LEAKAGE, BOT, DOS, RATE_LIMIT]"));
+    }
+
+    @Test
+    void ingestInvalidTimestampReturns400WithFieldError() throws Exception {
+        var body = eventJson("evt-bad-ts-001").replace("2026-05-20T14:32:10Z", "yesterday");
+
+        mockMvc.perform(post(INGEST_URL).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.detail").value("Validation failed"))
+                .andExpect(jsonPath("$.errors").isArray())
+                .andExpect(jsonPath("$.errors[0].field").value("[0].timestamp"))
+                .andExpect(jsonPath("$.errors[0].message", notNullValue()));
+    }
+
+    @Test
+    void ingestNullElementInBatchReturns400() throws Exception {
+        mockMvc.perform(post(INGEST_URL).contentType(MediaType.APPLICATION_JSON).content("[null]"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.detail").value("Validation failed"))
+                .andExpect(jsonPath("$.errors").isArray())
+                .andExpect(jsonPath("$.errors[0].field").value("[0]"))
+                .andExpect(jsonPath("$.errors[0].message").value("must not be null"));
+    }
+
+    @Test
+    void ingestNullAlongsideValidEventReturns400() throws Exception {
+        var body =
+                """
+                [
+                  %s,
+                  null
+                ]
+                """
+                        .formatted(eventJson("evt-null-slot-001"));
+
+        mockMvc.perform(post(INGEST_URL).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.detail").value("Validation failed"))
+                .andExpect(jsonPath("$.errors").isArray())
+                .andExpect(jsonPath("$.errors[0].field").value("[1]"))
+                .andExpect(jsonPath("$.errors[0].message").value("must not be null"));
+    }
+
+    @Test
     void ingestDuplicateEventIdReturns409Conflict() throws Exception {
         mockMvc.perform(post(INGEST_URL)
                         .contentType(MediaType.APPLICATION_JSON)
