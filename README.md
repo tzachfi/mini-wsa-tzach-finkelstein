@@ -65,7 +65,7 @@ OpenAPI JSON: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-d
 
 ### Ingest — `POST /v1/events/ingest`
 
-Accepts a single event object or an array of events. Always returns **201** with a JSON **array** of stored events (a single ingest is `[one]`). The server sets `receivedAt` and ignores client-supplied `receivedAt` / enrichment fields. `attackType` and `threatScore` are null until v0.2.
+Accepts a single event object or an array of events. Always returns **201** with a JSON **array** of stored events (a single ingest is `[one]`). The server sets `receivedAt` and computes `attackType` and `threatScore`. Client-supplied `receivedAt` / enrichment fields are ignored.
 
 Validation failures return **400** RFC 7807 Problem Details. Duplicate `eventId` returns **409**.
 
@@ -106,6 +106,31 @@ curl -sS -X POST http://localhost:8080/v1/events/ingest \
   -H 'Content-Type: application/json' \
   -d '[{ "eventId": "evt-00133", "timestamp": "2026-05-20T14:32:10Z", "configId": 14227, "clientIp": "203.0.113.42", "path": "/login", "rule": { "severity": "HIGH", "category": "BOT" }, "action": "ALERT" }]'
 ```
+
+### Enrichment
+
+Every ingested event is classified and scored before persist. `attackType` is a display string from `rule.category`:
+
+| `rule.category` | `attackType` |
+| --- | --- |
+| `INJECTION` | SQL/Command Injection |
+| `XSS` | Cross-Site Scripting |
+| `PROTOCOL_VIOLATION` | Protocol Anomaly |
+| `DATA_LEAKAGE` | Data Exfiltration |
+| `BOT` | Bot Activity |
+| `DOS` | Denial of Service |
+| `RATE_LIMIT` | Rate Limiting |
+
+`threatScore` is the sum of:
+
+- Severity base: CRITICAL 40, HIGH 30, MEDIUM 20, LOW 10
+- Action bonus: DENY +20, ALERT +10, MONITOR +0
+- Path bonus: path contains `/admin` or `/login` → +15
+- Repeat-offender bonus: +15 when `priorEventCount + 1 > 5` (more than 5 events from the same `clientIp` in the window)
+
+The repeat window is inclusive `[timestamp − 10 minutes, timestamp]`. Priors are stored rows for that IP plus **earlier siblings in the same batch** (stable-sorted by timestamp; response order stays the request order). Ingest fetches timestamps once per distinct IP over `[minTs − 10m, maxTs]`.
+
+Scores are capped at 100 (`Math.min(100, raw)`). Today's formula max is 90 (CRITICAL + DENY + path + repeat); 100 is reserved for later bonuses.
 
 ## Architecture
 
