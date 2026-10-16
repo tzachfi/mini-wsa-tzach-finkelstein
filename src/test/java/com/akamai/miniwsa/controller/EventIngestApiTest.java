@@ -256,6 +256,42 @@ class EventIngestApiTest {
     }
 
     @Test
+    void ingestOldStoredEventDoesNotBonusMuchNewerSiblingInSameBatch() throws Exception {
+        var ip = "198.51.100.60";
+        var storedTs = "2026-05-20T14:00:00Z";
+        var firstBatch = IntStream.rangeClosed(1, 5)
+                .mapToObj(i -> eventJson("evt-old-hist-%03d".formatted(i), ip, "/api/v1/login", storedTs))
+                .collect(Collectors.joining(",\n", "[\n", "\n]"));
+
+        mockMvc.perform(post(INGEST_URL).contentType(MediaType.APPLICATION_JSON).content(firstBatch))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$", hasSize(5)));
+
+        var mixedBatch =
+                """
+                [
+                  %s,
+                  %s
+                ]
+                """
+                        .formatted(
+                                eventJson("evt-old-plus-newer-old", ip, "/api/v1/login", storedTs),
+                                eventJson(
+                                        "evt-old-plus-newer-new",
+                                        ip,
+                                        "/api/v1/login",
+                                        "2026-05-20T16:00:00Z"));
+
+        mockMvc.perform(post(INGEST_URL).contentType(MediaType.APPLICATION_JSON).content(mixedBatch))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$", hasSize(2)))
+                .andExpect(jsonPath("$[0].eventId").value("evt-old-plus-newer-old"))
+                .andExpect(jsonPath("$[0].threatScore").value(90))
+                .andExpect(jsonPath("$[1].eventId").value("evt-old-plus-newer-new"))
+                .andExpect(jsonPath("$[1].threatScore").value(75));
+    }
+
+    @Test
     void ingestBatchOverMaxSizeReturns400() throws Exception {
         var body = IntStream.rangeClosed(1, 1001)
                 .mapToObj(i -> eventJson("evt-oversize-%04d".formatted(i)))

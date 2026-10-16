@@ -45,26 +45,21 @@ public class SecurityEventService {
         }
 
         var eventsByIp = events.stream().collect(Collectors.groupingBy(SecurityEvent::getClientIp));
-        Instant globalFrom = null;
-        Instant globalTo = null;
-        for (var ipEvents : eventsByIp.values()) {
-            var minTs = ipEvents.stream().map(SecurityEvent::getTimestamp).min(Instant::compareTo).orElseThrow();
-            var maxTs = ipEvents.stream().map(SecurityEvent::getTimestamp).max(Instant::compareTo).orElseThrow();
-            var from = minTs.minus(RepeatWindowCounter.REPEAT_WINDOW);
-            if (globalFrom == null || from.isBefore(globalFrom)) {
-                globalFrom = from;
-            }
-            if (globalTo == null || maxTs.isAfter(globalTo)) {
-                globalTo = maxTs;
-            }
-        }
-
         var history = new HashMap<String, List<Instant>>();
-        for (var row : securityEventRepository.findTimestampsInRange(
-                eventsByIp.keySet(), globalFrom, globalTo)) {
-            var ip = (String) row[0];
-            var ts = (Instant) row[1];
-            history.computeIfAbsent(ip, ignored -> new ArrayList<>()).add(ts);
+        for (var ipEvents : eventsByIp.entrySet()) {
+            var ip = ipEvents.getKey();
+            var minTs = ipEvents.getValue().stream()
+                    .map(SecurityEvent::getTimestamp)
+                    .min(Instant::compareTo)
+                    .orElseThrow();
+            var maxTs = ipEvents.getValue().stream()
+                    .map(SecurityEvent::getTimestamp)
+                    .max(Instant::compareTo)
+                    .orElseThrow();
+            var from = minTs.minus(RepeatWindowCounter.REPEAT_WINDOW);
+            for (var row : securityEventRepository.findTimestampsInRange(List.of(ip), from, maxTs)) {
+                history.computeIfAbsent(ip, ignored -> new ArrayList<>()).add((Instant) row[1]);
+            }
         }
 
         var priors = repeatWindowCounter.priorCounts(events, history);
