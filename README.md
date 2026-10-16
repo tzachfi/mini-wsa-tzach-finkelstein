@@ -67,7 +67,9 @@ OpenAPI JSON: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-d
 
 Accepts a single event object or an array of events. Always returns **201** with a JSON **array** of stored events (a single ingest is `[one]`). The server sets `receivedAt` and computes `attackType` and `threatScore`. Client-supplied `receivedAt` / enrichment fields are ignored.
 
-Validation failures return **400** RFC 7807 Problem Details. Duplicate `eventId` returns **409**.
+Arrays larger than `app.ingest.max-batch-size` (default **1000**) return **400**; nothing is written. Validation failures return **400** RFC 7807 Problem Details. Duplicate `eventId` returns **409**.
+
+There is no JSON body-size filter: Tomcat `maxPostSize` only limits form-encoded parsing, not a JSON body Spring reads from the input stream. A real cap would check `Content-Length` and wrap the input stream.
 
 Single event:
 

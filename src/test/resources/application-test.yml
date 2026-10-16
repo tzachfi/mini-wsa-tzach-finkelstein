@@ -11,3 +11,7 @@ spring:
   h2:
     console:
       enabled: false
+
+app:
+  ingest:
+    max-batch-size: 1000

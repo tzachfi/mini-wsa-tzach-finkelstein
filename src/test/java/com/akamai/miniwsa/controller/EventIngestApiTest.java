@@ -256,6 +256,21 @@ class EventIngestApiTest {
     }
 
     @Test
+    void ingestBatchOverMaxSizeReturns400() throws Exception {
+        var body = IntStream.rangeClosed(1, 1001)
+                .mapToObj(i -> eventJson("evt-oversize-%04d".formatted(i)))
+                .collect(Collectors.joining(",\n", "[\n", "\n]"));
+
+        mockMvc.perform(post(INGEST_URL).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.title").value("Bad Request"))
+                .andExpect(jsonPath("$.detail").value("Batch size exceeds maximum of 1000"))
+                .andExpect(jsonPath("$.errors").isArray())
+                .andExpect(jsonPath("$.errors[0].message").value("must contain at most 1000 events"));
+    }
+
+    @Test
     void ingestDuplicateEventIdReturns409Conflict() throws Exception {
         mockMvc.perform(post(INGEST_URL)
                         .contentType(MediaType.APPLICATION_JSON)

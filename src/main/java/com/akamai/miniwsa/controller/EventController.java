@@ -1,5 +1,6 @@
 package com.akamai.miniwsa.controller;
 
+import com.akamai.miniwsa.config.IngestProperties;
 import com.akamai.miniwsa.dto.EventIngestRequest;
 import com.akamai.miniwsa.dto.EventResponse;
 import com.akamai.miniwsa.exception.EventValidationException;
@@ -33,10 +34,17 @@ public class EventController {
     private final SecurityEventService securityEventService;
     private final ObjectMapper objectMapper;
     private final Validator validator;
+    private final IngestProperties ingestProperties;
 
     @PostMapping("/ingest")
     public ResponseEntity<List<EventResponse>> ingest(@RequestBody JsonNode body) {
         var requests = parseEvents(body);
+        if (requests.size() > ingestProperties.maxBatchSize()) {
+            throw new EventValidationException(
+                    "Batch size exceeds maximum of " + ingestProperties.maxBatchSize(),
+                    List.of(new EventValidationException.FieldError(
+                            "", "must contain at most " + ingestProperties.maxBatchSize() + " events")));
+        }
         validate(requests);
         return ResponseEntity.status(HttpStatus.CREATED).body(securityEventService.ingest(requests));
     }
