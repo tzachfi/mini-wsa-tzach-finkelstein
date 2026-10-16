@@ -17,7 +17,9 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
+import java.util.function.Supplier;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 
@@ -40,29 +42,41 @@ public class StatsService {
             throw new StatsQueryException("Time range exceeds maximum of " + statsProperties.maxRange());
         }
 
-        var buckets = CompletableFuture.supplyAsync(
-                () -> configId == null
-                        ? securityEventRepository.aggregateByCategoryAndAction(from, to)
-                        : securityEventRepository.aggregateByCategoryAndActionForConfig(configId, from, to),
-                statsQueryExecutor);
-        var attackers = CompletableFuture.supplyAsync(
-                () -> configId == null
-                        ? securityEventRepository.topAttackers(from, to, TOP_N)
-                        : securityEventRepository.topAttackersForConfig(configId, from, to, TOP_N),
-                statsQueryExecutor);
-        var paths = CompletableFuture.supplyAsync(
-                () -> configId == null
-                        ? securityEventRepository.topTargetedPaths(from, to, TOP_N)
-                        : securityEventRepository.topTargetedPathsForConfig(configId, from, to, TOP_N),
-                statsQueryExecutor);
-        return StatsRollup.assemble(
-                configId,
-                from,
-                to,
-                categoriesFrom(join(buckets)),
-                actionsFrom(join(buckets)),
-                join(attackers),
-                join(paths));
+        var submitted = new ArrayList<CompletableFuture<?>>();
+        try {
+            var buckets = submit(
+                    submitted,
+                    () -> configId == null
+                            ? securityEventRepository.aggregateByCategoryAndAction(from, to)
+                            : securityEventRepository.aggregateByCategoryAndActionForConfig(configId, from, to));
+            var attackers = submit(
+                    submitted,
+                    () -> configId == null
+                            ? securityEventRepository.topAttackers(from, to, TOP_N)
+                            : securityEventRepository.topAttackersForConfig(configId, from, to, TOP_N));
+            var paths = submit(
+                    submitted,
+                    () -> configId == null
+                            ? securityEventRepository.topTargetedPaths(from, to, TOP_N)
+                            : securityEventRepository.topTargetedPathsForConfig(configId, from, to, TOP_N));
+            return StatsRollup.assemble(
+                    configId,
+                    from,
+                    to,
+                    categoriesFrom(join(buckets)),
+                    actionsFrom(join(buckets)),
+                    join(attackers),
+                    join(paths));
+        } catch (TaskRejectedException ex) {
+            submitted.forEach(future -> future.cancel(true));
+            throw ex;
+        }
+    }
+
+    private <T> CompletableFuture<T> submit(List<CompletableFuture<?>> submitted, Supplier<T> query) {
+        var future = CompletableFuture.supplyAsync(query, statsQueryExecutor);
+        submitted.add(future);
+        return future;
     }
 
     private static <T> T join(CompletableFuture<T> future) {

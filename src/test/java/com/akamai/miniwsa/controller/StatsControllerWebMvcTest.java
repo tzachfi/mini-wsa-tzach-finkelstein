@@ -21,7 +21,13 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
-@WebMvcTest(controllers = StatsController.class, properties = "app.stats.max-range=31d")
+@WebMvcTest(
+        controllers = StatsController.class,
+        properties = {
+            "app.stats.max-range=31d",
+            "app.stats.query-threads=6",
+            "app.stats.query-queue-capacity=6"
+        })
 @Import({StatsService.class, StatsQueryExecutorConfig.class, GlobalExceptionHandler.class})
 @EnableConfigurationProperties(StatsProperties.class)
 class StatsControllerWebMvcTest {

@@ -38,7 +38,8 @@ class StatsServiceParallelQueryTest {
     @BeforeEach
     void setUp() {
         executor = Executors.newFixedThreadPool(3);
-        statsService = new StatsService(securityEventRepository, new StatsProperties(Duration.ofDays(31)), executor);
+        statsService = new StatsService(
+                securityEventRepository, new StatsProperties(Duration.ofDays(31), 6, 6), executor);
     }
 
     @AfterEach
