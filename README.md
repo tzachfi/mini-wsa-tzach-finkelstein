@@ -10,7 +10,8 @@ Context: coordinated campaign **Operation Shadow Flood** (SQL injection probes, 
 - Spring Boot 3.4
 - Spring Web, Spring Data JPA, Bean Validation
 - PostgreSQL 16 (primary store)
-- H2 (tests)
+- H2 (ingest slice tests)
+- Testcontainers PostgreSQL (stats API integration tests)
 - Springdoc OpenAPI (Swagger UI)
 - Docker / Docker Compose
 
@@ -18,7 +19,7 @@ Context: coordinated campaign **Operation Shadow Flood** (SQL injection probes, 
 
 - JDK 21
 - Maven 3.9+ (or the included `./mvnw` wrapper)
-- Docker Desktop (for `docker compose up`)
+- Docker Desktop (for `docker compose up` and Testcontainers during `./mvnw verify`)
 
 ## CI
 
@@ -134,6 +135,47 @@ The repeat window is inclusive `[timestamp − 10 minutes, timestamp]`. Priors a
 
 Scores are capped at 100 (`Math.min(100, raw)`). Today's formula max is 90 (CRITICAL + DENY + path + repeat); 100 is reserved for later bonuses.
 
+### Stats — `GET /v1/stats/summary`
+
+Aggregates stored events for an optional `configId` and a required half-open time window on event `timestamp` (`[from, to)`). Omit `configId` to aggregate across all configurations; the response still includes `configId: null`.
+
+`from` and `to` are required ISO-8601 instants with an offset. `from` must be strictly before `to`. The window may be at most `app.stats.max-range` (default **31d**, exact `Duration.ofDays(31)`); longer ranges return **400**. Empty matches return **200** with zero-filled maps, `avgThreatScore: null`, and empty top lists.
+
+`byCategory` always contains all seven `RuleCategory` keys and `byAction` all three `Action` keys (stable dashboard shape). Averages are rounded to one decimal, half-up; an average of zero events is `null`, not `0`. Top attackers are the top 10 by count, then avg threat score descending, then `clientIp` ascending. Top paths are the top 10 by count, then `path` ascending.
+
+```bash
+curl -sS 'http://localhost:8080/v1/stats/summary?configId=14227&from=2026-06-01T00:00:00Z&to=2026-06-02T00:00:00Z'
+```
+
+Example:
+
+```json
+{
+  "configId": 14227,
+  "timeRange": { "from": "2026-06-01T00:00:00Z", "to": "2026-06-02T00:00:00Z" },
+  "totalEvents": 4,
+  "avgThreatScore": 56.3,
+  "byCategory": {
+    "INJECTION": { "count": 2, "avgThreatScore": 75.0 },
+    "XSS": { "count": 1, "avgThreatScore": 35.0 },
+    "PROTOCOL_VIOLATION": { "count": 0, "avgThreatScore": null },
+    "DATA_LEAKAGE": { "count": 0, "avgThreatScore": null },
+    "BOT": { "count": 1, "avgThreatScore": 40.0 },
+    "DOS": { "count": 0, "avgThreatScore": null },
+    "RATE_LIMIT": { "count": 0, "avgThreatScore": null }
+  },
+  "byAction": { "DENY": 2, "ALERT": 1, "MONITOR": 1 },
+  "topAttackers": [
+    { "clientIp": "203.0.113.42", "count": 3, "avgThreatScore": 61.7 }
+  ],
+  "topTargetedPaths": [
+    { "path": "/api/v1/login", "count": 2 }
+  ]
+}
+```
+
+Three JPQL aggregations (category×action, top attackers, top paths) run in parallel, so latency is the slowest query rather than the sum; that triples concurrent database load per request and helps latency, not throughput. The three scans share `app.stats.query-threads` workers (default **6**) and a queue of `app.stats.query-queue-capacity` (default **6**). Hikari’s `maximum-pool-size` is **10**, so ingest keeps the remaining connections. When the worker pool and queue are full, the request returns **503** with `Retry-After: 2` instead of running the scan on the Tomcat thread. A present `configId` uses `e.configId = :configId` so Postgres can pick `idx_se_config_ts`; omit `configId` to scan `idx_se_ts`. Category and action counts come from one `GROUP BY e.rule.category, e.action` (at most 21 buckets), then `StatsService` sums those buckets. Totals and the root average are derived from the category sums, not a fourth query. Top-N uses Spring Data `Limit.of(10)` and returns a `List` (never `Page`, which would emit a derived count query).
+
 ## Architecture
 
 Layered Spring Boot service: `Controller` → `Service` → `Repository` → PostgreSQL.
@@ -144,7 +186,7 @@ A diagram will be added once ingestion, enrichment, and analytics APIs are in pl
 
 ## Storage justification
 
-PostgreSQL is the primary store: relational queries, JPQL aggregations for stats, and indexes on `configId`, `timestamp`, `clientIp`, and `path` keep top-N attacker/path queries efficient at assignment scale. H2 is used only for unit/slice tests so CI does not require Docker.
+PostgreSQL is the primary store: relational queries, JPQL aggregations for stats, and composite indexes `(config_id, event_timestamp, id)`, `(event_timestamp, id)`, and `(client_ip, event_timestamp)` keep time-bounded scans and the ingest repeat-offender check efficient at assignment scale. `path` is deliberately **not** indexed — top-path `GROUP BY` runs after the time-range filter. H2 is used for ingest API tests; stats summary is proven against Postgres via Testcontainers.
 
 ## Git tags / milestones
 

@@ -8,6 +8,8 @@ spring:
     url: jdbc:postgresql://localhost:5432/miniwsa?reWriteBatchedInserts=true
     username: miniwsa
     password: miniwsa
+    hikari:
+      maximum-pool-size: 10
   jpa:
     hibernate:
       ddl-auto: update
@@ -34,3 +36,7 @@ springdoc:
 app:
   ingest:
     max-batch-size: 1000
+  stats:
+    max-range: 31d
+    query-threads: 6
+    query-queue-capacity: 6

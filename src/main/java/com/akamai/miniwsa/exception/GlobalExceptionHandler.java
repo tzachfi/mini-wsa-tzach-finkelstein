@@ -1,12 +1,17 @@
 package com.akamai.miniwsa.exception;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @Slf4j
 @RestControllerAdvice
@@ -23,6 +28,40 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(InvalidRequestShapeException.class)
     ProblemDetail handleInvalidShape(InvalidRequestShapeException ex) {
         var problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setTitle("Bad Request");
+        return problem;
+    }
+
+    @ExceptionHandler(StatsQueryException.class)
+    ProblemDetail handleStatsQuery(StatsQueryException ex) {
+        var problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setTitle("Bad Request");
+        return problem;
+    }
+
+    @ExceptionHandler(TaskRejectedException.class)
+    ResponseEntity<ProblemDetail> handleRejected(TaskRejectedException ex) {
+        log.warn("Stats query executor at capacity", ex);
+        var problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.SERVICE_UNAVAILABLE, "Stats queries are at capacity; retry shortly");
+        problem.setTitle("Service Unavailable");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "2")
+                .body(problem);
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    ProblemDetail handleMissingParam(MissingServletRequestParameterException ex) {
+        var problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST, "Required parameter '%s' is missing".formatted(ex.getParameterName()));
+        problem.setTitle("Bad Request");
+        return problem;
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    ProblemDetail handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        var problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST, "Invalid value for parameter '%s'".formatted(ex.getName()));
         problem.setTitle("Bad Request");
         return problem;
     }
