@@ -67,7 +67,9 @@ OpenAPI JSON: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-d
 
 Accepts a single event object or an array of events. Always returns **201** with a JSON **array** of stored events (a single ingest is `[one]`). The server sets `receivedAt` and computes `attackType` and `threatScore`. Client-supplied `receivedAt` / enrichment fields are ignored.
 
-Validation failures return **400** RFC 7807 Problem Details. Duplicate `eventId` returns **409**.
+Arrays larger than `app.ingest.max-batch-size` (default **1000**) return **400**; nothing is written. Validation failures return **400** RFC 7807 Problem Details. Duplicate `eventId` returns **409**.
+
+There is no JSON body-size filter: Tomcat `maxPostSize` only limits form-encoded parsing, not a JSON body Spring reads from the input stream. A real cap would check `Content-Length` and wrap the input stream.
 
 Single event:
 
@@ -128,7 +130,7 @@ Every ingested event is classified and scored before persist. `attackType` is a 
 - Path bonus: path contains `/admin` or `/login` → +15
 - Repeat-offender bonus: +15 when `priorEventCount + 1 > 5` (more than 5 events from the same `clientIp` in the window)
 
-The repeat window is inclusive `[timestamp − 10 minutes, timestamp]`. Priors are stored rows for that IP plus **earlier siblings in the same batch** (stable-sorted by timestamp; response order stays the request order). Ingest loads history in **one** query for the batch’s distinct IPs over the union of `[minTs − 10m, maxTs]`, ordered by IP then timestamp, and binary-searches each window in memory. A Redis/stream-state sliding window remains a later scale-up option.
+The repeat window is inclusive `[timestamp − 10 minutes, timestamp]`. Priors are stored rows for that IP plus **earlier siblings in the same batch** (stable-sorted by timestamp; response order stays the request order). Ingest loads history in **one** query: each distinct IP contributes its own `[minTs − 10m, maxTs]` predicate, OR-ed together so `idx_se_ip_ts` can BitmapOr the ranges. Results are ordered by IP then timestamp and binary-searched per event in memory. A later step is a per-event SQL count; a Redis/stream-state sliding window remains the option at real scale.
 
 Scores are capped at 100 (`Math.min(100, raw)`). Today's formula max is 90 (CRITICAL + DENY + path + repeat); 100 is reserved for later bonuses.
 
@@ -156,7 +158,8 @@ PostgreSQL is the primary store: relational queries, JPQL aggregations for stats
 
 ## What I’d improve given more time
 
-_TBD after implementation._
+- Per-event SQL counts for the repeat-offender window, then a Redis sliding window at real scale. History is already one OR-of-windows query; those steps drop the timestamp materialization.
+- Partitioning `security_events` by `event_timestamp` cannot keep a global `UNIQUE(event_id)`: Postgres unique keys on partitions must include the partition column, so the same `eventId` could be inserted again at another timestamp and **409** would no longer hold. A retention job would drop old rows and weaken 409 after the retention window. The spec does not ask for either.
 
 ## Challenges and how they were solved
 

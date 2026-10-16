@@ -29,9 +29,7 @@ import lombok.Setter;
             // same queries without configId
             @Index(name = "idx_se_ts", columnList = "event_timestamp, id"),
             // repeat-offender check at ingestion
-            @Index(name = "idx_se_ip_ts", columnList = "client_ip, event_timestamp"),
-            // category filter without configId (alerting bonus)
-            @Index(name = "idx_se_cat_ts", columnList = "rule_category, event_timestamp")
+            @Index(name = "idx_se_ip_ts", columnList = "client_ip, event_timestamp")
         })
 @Getter
 @Setter
