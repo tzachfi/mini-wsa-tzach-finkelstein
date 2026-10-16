@@ -130,7 +130,7 @@ Every ingested event is classified and scored before persist. `attackType` is a 
 - Path bonus: path contains `/admin` or `/login` → +15
 - Repeat-offender bonus: +15 when `priorEventCount + 1 > 5` (more than 5 events from the same `clientIp` in the window)
 
-The repeat window is inclusive `[timestamp − 10 minutes, timestamp]`. Priors are stored rows for that IP plus **earlier siblings in the same batch** (stable-sorted by timestamp; response order stays the request order). Ingest loads history **per distinct IP** over that IP’s `[minTs − 10m, maxTs]`, ordered by timestamp, and binary-searches each event’s 10-minute window in memory. A later step is a per-event SQL count; a Redis/stream-state sliding window remains the option at real scale.
+The repeat window is inclusive `[timestamp − 10 minutes, timestamp]`. Priors are stored rows for that IP plus **earlier siblings in the same batch** (stable-sorted by timestamp; response order stays the request order). Ingest loads history in **one** query: each distinct IP contributes its own `[minTs − 10m, maxTs]` predicate, OR-ed together so `idx_se_ip_ts` can BitmapOr the ranges. Results are ordered by IP then timestamp and binary-searched per event in memory. A later step is a per-event SQL count; a Redis/stream-state sliding window remains the option at real scale.
 
 Scores are capped at 100 (`Math.min(100, raw)`). Today's formula max is 90 (CRITICAL + DENY + path + repeat); 100 is reserved for later bonuses.
 
@@ -158,7 +158,7 @@ PostgreSQL is the primary store: relational queries, JPQL aggregations for stats
 
 ## What I’d improve given more time
 
-- Per-event SQL counts for the repeat-offender window, then a Redis sliding window at real scale.
+- Per-event SQL counts for the repeat-offender window, then a Redis sliding window at real scale. History is already one OR-of-windows query; those steps drop the timestamp materialization.
 - Partitioning `security_events` by `event_timestamp` cannot keep a global `UNIQUE(event_id)`: Postgres unique keys on partitions must include the partition column, so the same `eventId` could be inserted again at another timestamp and **409** would no longer hold. A retention job would drop old rows and weaken 409 after the retention window. The spec does not ask for either.
 
 ## Challenges and how they were solved

@@ -256,7 +256,7 @@ class EventIngestApiTest {
     }
 
     @Test
-    void ingestOldStoredEventDoesNotBonusMuchNewerSiblingInSameBatch() throws Exception {
+    void ingestScoringIgnoresStoredHistoryOutsideTenMinuteWindow() throws Exception {
         var ip = "198.51.100.60";
         var storedTs = "2026-05-20T14:00:00Z";
         var firstBatch = IntStream.rangeClosed(1, 5)

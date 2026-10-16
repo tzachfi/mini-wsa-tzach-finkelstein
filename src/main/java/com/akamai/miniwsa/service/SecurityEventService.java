@@ -8,6 +8,7 @@ import com.akamai.miniwsa.enrichment.ThreatScoreCalculator;
 import com.akamai.miniwsa.model.GeoLocationEmbeddable;
 import com.akamai.miniwsa.model.RuleEmbeddable;
 import com.akamai.miniwsa.model.SecurityEvent;
+import com.akamai.miniwsa.repository.IpTimeWindow;
 import com.akamai.miniwsa.repository.SecurityEventRepository;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -45,21 +46,25 @@ public class SecurityEventService {
         }
 
         var eventsByIp = events.stream().collect(Collectors.groupingBy(SecurityEvent::getClientIp));
+        var windows = eventsByIp.entrySet().stream()
+                .map(ipEvents -> {
+                    var minTs = ipEvents.getValue().stream()
+                            .map(SecurityEvent::getTimestamp)
+                            .min(Instant::compareTo)
+                            .orElseThrow();
+                    var maxTs = ipEvents.getValue().stream()
+                            .map(SecurityEvent::getTimestamp)
+                            .max(Instant::compareTo)
+                            .orElseThrow();
+                    return new IpTimeWindow(
+                            ipEvents.getKey(), minTs.minus(RepeatWindowCounter.REPEAT_WINDOW), maxTs);
+                })
+                .toList();
+
         var history = new HashMap<String, List<Instant>>();
-        for (var ipEvents : eventsByIp.entrySet()) {
-            var ip = ipEvents.getKey();
-            var minTs = ipEvents.getValue().stream()
-                    .map(SecurityEvent::getTimestamp)
-                    .min(Instant::compareTo)
-                    .orElseThrow();
-            var maxTs = ipEvents.getValue().stream()
-                    .map(SecurityEvent::getTimestamp)
-                    .max(Instant::compareTo)
-                    .orElseThrow();
-            var from = minTs.minus(RepeatWindowCounter.REPEAT_WINDOW);
-            for (var row : securityEventRepository.findTimestampsInRange(List.of(ip), from, maxTs)) {
-                history.computeIfAbsent(ip, ignored -> new ArrayList<>()).add((Instant) row[1]);
-            }
+        for (var row : securityEventRepository.findTimestampsInWindows(windows)) {
+            var ip = (String) row[0];
+            history.computeIfAbsent(ip, ignored -> new ArrayList<>()).add((Instant) row[1]);
         }
 
         var priors = repeatWindowCounter.priorCounts(events, history);
