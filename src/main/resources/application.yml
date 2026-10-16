@@ -34,3 +34,5 @@ springdoc:
 app:
   ingest:
     max-batch-size: 1000
+  stats:
+    max-range: 31d

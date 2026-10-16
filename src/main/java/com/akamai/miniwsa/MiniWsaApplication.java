@@ -1,12 +1,11 @@
 package com.akamai.miniwsa;
 
-import com.akamai.miniwsa.config.IngestProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 @SpringBootApplication
-@EnableConfigurationProperties(IngestProperties.class)
+@ConfigurationPropertiesScan
 public class MiniWsaApplication {
 
     public static void main(String[] args) {
