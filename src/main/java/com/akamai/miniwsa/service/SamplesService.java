@@ -1,0 +1,38 @@
+package com.akamai.miniwsa.service;
+
+import com.akamai.miniwsa.dto.SamplesResponse;
+import com.akamai.miniwsa.model.Action;
+import com.akamai.miniwsa.model.RuleCategory;
+import com.akamai.miniwsa.repository.SampleFilter;
+import com.akamai.miniwsa.repository.SecurityEventRepository;
+import java.time.Instant;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+@Service
+@RequiredArgsConstructor
+public class SamplesService {
+
+    private final SecurityEventRepository securityEventRepository;
+
+    public SamplesResponse sample(
+            Integer configId,
+            Instant from,
+            Instant to,
+            RuleCategory category,
+            Action action,
+            int limit,
+            int offset) {
+        var filter = new SampleFilter(configId, from, to, category, action);
+        var page = securityEventRepository.findPage(filter, offset, limit);
+        var n = page.size();
+        long total;
+        if (n == limit || (n == 0 && offset > 0)) {
+            total = securityEventRepository.countMatching(filter);
+        } else {
+            total = (long) offset + n;
+        }
+        return new SamplesResponse(
+                page.stream().map(EventResponseMapper::toResponse).toList(), total, limit, offset);
+    }
+}
