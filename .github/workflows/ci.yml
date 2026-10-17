@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main, master]
 
@@ -27,3 +29,25 @@ jobs:
 
       - name: Verify
         run: ./mvnw -B verify
+
+  compose-smoke:
+    name: Compose smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start stack
+        run: docker compose up --build -d --wait
+
+      - name: Ingest and query
+        run: |
+          curl -fsS -X POST localhost:8080/v1/events/ingest -H 'Content-Type: application/json' \
+            -d '[{"eventId":"smoke-1","timestamp":"2026-05-20T14:32:10Z","configId":1,"clientIp":"1.2.3.4","path":"/login","rule":{"severity":"HIGH","category":"BOT"},"action":"ALERT"}]'
+          curl -fsS 'localhost:8080/v1/stats/summary?from=2026-05-20T00:00:00Z&to=2026-05-21T00:00:00Z'
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs

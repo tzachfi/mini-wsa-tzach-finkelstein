@@ -22,8 +22,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@Testcontainers
-class StatsTimeseriesApiTest {
+@Testcontainers(disabledWithoutDocker = true)
+class StatsTimeseriesApiIT {
 
     private static final String INGEST_URL = "/v1/events/ingest";
     private static final String TIMESERIES_URL = "/v1/stats/timeseries";

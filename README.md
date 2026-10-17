@@ -1,5 +1,15 @@
 # Mini WSA
 
+[![CI](https://github.com/tzachfi/mini-wsa-tzach-finkelstein/actions/workflows/ci.yml/badge.svg)](https://github.com/tzachfi/mini-wsa-tzach-finkelstein/actions/workflows/ci.yml)
+
+**Needs:** Docker.
+
+```bash
+docker compose up --build
+```
+
+Open [http://localhost:8080](http://localhost:8080/).
+
 Mini Web Security Analytics pipeline — a simplified Akamai WSA service that ingests security events (DLRs), classifies and enriches them, and exposes analytics APIs.
 
 Context: coordinated campaign **Operation Shadow Flood** (SQL injection probes, credential stuffing bots, slow-rate DDoS). SOCs are flooded with raw Data Log Records; this service turns them into scored, queryable analytics.
@@ -11,7 +21,7 @@ Context: coordinated campaign **Operation Shadow Flood** (SQL injection probes, 
 - Spring Web, Spring Data JPA, Bean Validation
 - PostgreSQL 16 (primary store)
 - H2 (ingest slice tests)
-- Testcontainers PostgreSQL (stats and samples API integration tests)
+- Testcontainers PostgreSQL (stats, samples, and timeseries API integration tests; skipped without Docker)
 - Springdoc OpenAPI (Swagger UI)
 - Docker / Docker Compose
 
@@ -19,22 +29,30 @@ Context: coordinated campaign **Operation Shadow Flood** (SQL injection probes, 
 
 - JDK 21
 - Maven 3.9+ (or the included `./mvnw` wrapper)
-- Docker Desktop (for `docker compose up` and Testcontainers during `./mvnw verify`)
+- Docker Desktop (for `docker compose up` and the Postgres tests during `./mvnw verify`)
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs `./mvnw -B verify` on pull requests targeting `main` / `master`.
+GitHub Actions (`.github/workflows/ci.yml`) runs `./mvnw -B verify` on pushes to `main` and on pull requests targeting `main` / `master`. A second job, `compose-smoke`, runs `docker compose up --build -d --wait`, then posts one ingest event and queries `GET /v1/stats/summary`.
 
 ## How to build & run
 
 ### Local (Maven + Postgres)
 
-`./mvnw spring-boot:run` uses `localhost:5432` from `application.yml`. Use any Postgres with database/user/password `miniwsa`. Compose Postgres is internal-only (no host `5432` mapping); `psql` from the host is `docker compose exec postgres psql -U miniwsa -d miniwsa`.
+`./mvnw spring-boot:run` uses `localhost:5432` from `application.yml` (override with `DB_URL`). Compose Postgres is internal-only unless you opt in:
+
+```bash
+make db
+./mvnw spring-boot:run
+```
+
+`make db` publishes `${DB_PORT:-5432}` via `docker-compose.db.yml`. Use any Postgres with database/user/password `miniwsa`. `psql` from the host is `docker compose exec postgres psql -U miniwsa -d miniwsa`.
 
 ```bash
 ./mvnw verify
-./mvnw spring-boot:run
 ```
+
+Postgres integration tests (`*IT`) need Docker and are skipped without it. `./mvnw package` runs unit tests only and needs a JDK.
 
 The API listens on `http://localhost:8080`.
 
@@ -44,13 +62,19 @@ The API listens on `http://localhost:8080`.
 docker compose up --build
 ```
 
+To run the demo again from a clean database (seeded `eventId`s return 409 otherwise):
+
+```bash
+docker compose down -v
+```
+
 Postgres stays on the Compose network only (`postgres:5432`). The host mapping that used to fail when 5432 was already allocated is gone. The app still publishes **8080**. If that port is taken:
 
 ```bash
 APP_PORT=18080 docker compose up --build
 ```
 
-Make aliases: `make up`, `make down`, `make logs`.
+Make aliases: `make up`, `make down`, `make logs`, `make db`.
 
 The demo page is [http://localhost:8080/](http://localhost:8080/). **Generate and ingest** calls `GET /v1/dev/events`, then posts each chunk to ingest, then draws `GET /v1/stats/timeseries` as a Chart.js line chart. **Download JSON (no ingest)** is that same GET only — nothing is stored. **Load stats summary**, **Load samples**, and **Load timeseries** call `GET /v1/stats/summary`, `GET /v1/events/samples`, and `GET /v1/stats/timeseries` on the last ingest window (or the last 24 hours). The chart uses Chart.js 4 from jsDelivr (`5m` buckets by default).
 
@@ -185,7 +209,7 @@ Every query here has the same shape: filter by config and time range, then group
 - `action` and `category` have too few distinct values for an index to help.
 - Every extra index slows inserts.
 
-**Testing:** ingest tests run on H2 for speed. Stats and samples pagination run against real Postgres via Testcontainers, because their results depend on Postgres aggregation and ordering behavior.
+**Testing:** ingest tests run on H2 for speed. Stats, samples, and timeseries run against real Postgres via Testcontainers (`./mvnw verify`); they are skipped when Docker is missing.
 
 **At real scale**, stats cost grows with the number of events in the range. The next steps would be time partitioning, then rollups (or TimescaleDB continuous aggregates), then a columnar store like ClickHouse. Only the repository layer would change.
 
@@ -222,4 +246,3 @@ today the check queries the db, and it gets slower the more events an IP sends. 
 - Pre-aggregation for stats: stats count every raw event in the range, so they slow down as data grows. i'd keep hourly totals per config, category and action, updated on ingest, and only count raw events for the partial hours at the edges.
 
 - Async ingestion: put a queue (Kafka) between the API and the db, so traffic spikes don't hit the db directly.
-
