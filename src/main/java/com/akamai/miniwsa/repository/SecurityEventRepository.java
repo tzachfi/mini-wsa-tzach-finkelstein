@@ -4,6 +4,7 @@ import com.akamai.miniwsa.model.SecurityEvent;
 import com.akamai.miniwsa.repository.projection.AttackerAgg;
 import com.akamai.miniwsa.repository.projection.CategoryActionAgg;
 import com.akamai.miniwsa.repository.projection.PathAgg;
+import com.akamai.miniwsa.repository.projection.TimeBucketAgg;
 import java.time.Instant;
 import java.util.List;
 import org.springframework.data.domain.Limit;
@@ -86,4 +87,84 @@ public interface SecurityEventRepository extends JpaRepository<SecurityEvent, Lo
             @Param("from") Instant from,
             @Param("to") Instant to,
             Limit limit);
+
+    @Query(
+            value =
+                    """
+                    WITH buckets AS (
+                        SELECT date_bin(
+                                   make_interval(secs => :strideSeconds),
+                                   event_timestamp,
+                                   TIMESTAMPTZ '2000-01-01 00:00:00+00'
+                               ) AS bucket_start,
+                               COUNT(*) AS event_count
+                        FROM security_events
+                        WHERE event_timestamp >= CAST(:from AS timestamptz)
+                          AND event_timestamp < CAST(:to AS timestamptz)
+                        GROUP BY 1
+                    ),
+                    series AS (
+                        SELECT gs AS bucket_start
+                        FROM generate_series(
+                            date_bin(
+                                make_interval(secs => :strideSeconds),
+                                CAST(:from AS timestamptz),
+                                TIMESTAMPTZ '2000-01-01 00:00:00+00'
+                            ),
+                            CAST(:to AS timestamptz),
+                            make_interval(secs => :strideSeconds)
+                        ) AS gs
+                    )
+                    SELECT series.bucket_start AS "bucketStart",
+                           COALESCE(buckets.event_count, 0) AS "eventCount"
+                    FROM series
+                    LEFT JOIN buckets ON buckets.bucket_start = series.bucket_start
+                    WHERE series.bucket_start < CAST(:to AS timestamptz)
+                    ORDER BY series.bucket_start
+                    """,
+            nativeQuery = true)
+    List<TimeBucketAgg> timeSeries(
+            @Param("from") Instant from, @Param("to") Instant to, @Param("strideSeconds") int strideSeconds);
+
+    @Query(
+            value =
+                    """
+                    WITH buckets AS (
+                        SELECT date_bin(
+                                   make_interval(secs => :strideSeconds),
+                                   event_timestamp,
+                                   TIMESTAMPTZ '2000-01-01 00:00:00+00'
+                               ) AS bucket_start,
+                               COUNT(*) AS event_count
+                        FROM security_events
+                        WHERE config_id = :configId
+                          AND event_timestamp >= CAST(:from AS timestamptz)
+                          AND event_timestamp < CAST(:to AS timestamptz)
+                        GROUP BY 1
+                    ),
+                    series AS (
+                        SELECT gs AS bucket_start
+                        FROM generate_series(
+                            date_bin(
+                                make_interval(secs => :strideSeconds),
+                                CAST(:from AS timestamptz),
+                                TIMESTAMPTZ '2000-01-01 00:00:00+00'
+                            ),
+                            CAST(:to AS timestamptz),
+                            make_interval(secs => :strideSeconds)
+                        ) AS gs
+                    )
+                    SELECT series.bucket_start AS "bucketStart",
+                           COALESCE(buckets.event_count, 0) AS "eventCount"
+                    FROM series
+                    LEFT JOIN buckets ON buckets.bucket_start = series.bucket_start
+                    WHERE series.bucket_start < CAST(:to AS timestamptz)
+                    ORDER BY series.bucket_start
+                    """,
+            nativeQuery = true)
+    List<TimeBucketAgg> timeSeriesForConfig(
+            @Param("configId") Integer configId,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            @Param("strideSeconds") int strideSeconds);
 }
