@@ -2,6 +2,8 @@ package com.akamai.miniwsa.service;
 
 import com.akamai.miniwsa.config.StatsProperties;
 import com.akamai.miniwsa.dto.StatsSummaryResponse;
+import com.akamai.miniwsa.dto.TimeSeriesInterval;
+import com.akamai.miniwsa.dto.TimeSeriesResponse;
 import com.akamai.miniwsa.exception.StatsQueryException;
 import com.akamai.miniwsa.model.Action;
 import com.akamai.miniwsa.model.RuleCategory;
@@ -34,13 +36,7 @@ public class StatsService {
     private final Executor statsQueryExecutor;
 
     public StatsSummaryResponse summarize(Integer configId, Instant from, Instant to) {
-        if (!from.isBefore(to)) {
-            throw new StatsQueryException("'from' must be before 'to'");
-        }
-        var range = Duration.between(from, to);
-        if (range.compareTo(statsProperties.maxRange()) > 0) {
-            throw new StatsQueryException("Time range exceeds maximum of " + statsProperties.maxRange());
-        }
+        validateWindow(from, to);
 
         var submitted = new ArrayList<CompletableFuture<?>>();
         try {
@@ -71,6 +67,39 @@ public class StatsService {
             submitted.forEach(future -> future.cancel(true));
             throw ex;
         }
+    }
+
+    public TimeSeriesResponse timeseries(Integer configId, Instant from, Instant to, TimeSeriesInterval interval) {
+        var range = validateWindow(from, to);
+        if (range.compareTo(interval.maxRange()) > 0) {
+            throw new StatsQueryException(
+                    "Time range exceeds maximum of " + interval.maxRange() + " for interval " + interval.token());
+        }
+        return join(CompletableFuture.supplyAsync(
+                () -> loadTimeseries(configId, from, to, interval), statsQueryExecutor));
+    }
+
+    private TimeSeriesResponse loadTimeseries(
+            Integer configId, Instant from, Instant to, TimeSeriesInterval interval) {
+        var rows = configId == null
+                ? securityEventRepository.timeSeries(from, to, interval.strideSeconds())
+                : securityEventRepository.timeSeriesForConfig(configId, from, to, interval.strideSeconds());
+        var points = rows.stream()
+                .map(row -> new TimeSeriesResponse.Point(row.getBucketStart(), nz(row.getEventCount())))
+                .toList();
+        return new TimeSeriesResponse(
+                configId, interval, new StatsSummaryResponse.TimeRange(from, to), points);
+    }
+
+    private Duration validateWindow(Instant from, Instant to) {
+        if (!from.isBefore(to)) {
+            throw new StatsQueryException("'from' must be before 'to'");
+        }
+        var range = Duration.between(from, to);
+        if (range.compareTo(statsProperties.maxRange()) > 0) {
+            throw new StatsQueryException("Time range exceeds maximum of " + statsProperties.maxRange());
+        }
+        return range;
     }
 
     private <T> CompletableFuture<T> submit(List<CompletableFuture<?>> submitted, Supplier<T> query) {

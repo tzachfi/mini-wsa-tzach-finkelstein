@@ -42,4 +42,20 @@ class StatsControllerRejectedExecutionWebMvcTest {
                 .andExpect(jsonPath("$.title").value("Service Unavailable"))
                 .andExpect(jsonPath("$.detail").isString());
     }
+
+    @Test
+    void rejectedTimeseriesReturns503WithRetryAfter() throws Exception {
+        when(statsService.timeseries(any(), any(), any(), any()))
+                .thenThrow(new TaskRejectedException("full", new RejectedExecutionException("full")));
+
+        mockMvc.perform(get("/v1/stats/timeseries")
+                        .param("from", "2026-06-01T00:00:00Z")
+                        .param("to", "2026-06-02T00:00:00Z")
+                        .param("interval", "5m"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Retry-After", "2"))
+                .andExpect(jsonPath("$.status").value(503))
+                .andExpect(jsonPath("$.title").value("Service Unavailable"))
+                .andExpect(jsonPath("$.detail").isString());
+    }
 }

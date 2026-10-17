@@ -1,6 +1,8 @@
 package com.akamai.miniwsa.controller;
 
 import com.akamai.miniwsa.dto.StatsSummaryResponse;
+import com.akamai.miniwsa.dto.TimeSeriesInterval;
+import com.akamai.miniwsa.dto.TimeSeriesResponse;
 import com.akamai.miniwsa.service.StatsService;
 import java.time.Instant;
 import lombok.RequiredArgsConstructor;
@@ -22,5 +24,14 @@ public class StatsController {
             @RequestParam Instant from,
             @RequestParam Instant to) {
         return statsService.summarize(configId, from, to);
+    }
+
+    @GetMapping("/timeseries")
+    public TimeSeriesResponse timeseries(
+            @RequestParam(required = false) Integer configId,
+            @RequestParam Instant from,
+            @RequestParam Instant to,
+            @RequestParam TimeSeriesInterval interval) {
+        return statsService.timeseries(configId, from, to, interval);
     }
 }

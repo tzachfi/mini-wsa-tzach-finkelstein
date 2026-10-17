@@ -55,6 +55,9 @@
         cursor: not-allowed;
         opacity: 0.6;
       }
+      .btn-spaced {
+        margin-top: 12px;
+      }
       label.inline {
         display: inline-flex;
         align-items: center;
@@ -68,13 +71,28 @@
         white-space: pre-wrap;
         min-height: 4rem;
       }
+      .chart-panel {
+        margin-top: 1.25rem;
+      }
+      .chart-wrap {
+        position: relative;
+        margin-top: 0.75rem;
+        padding: 0.75rem 0.75rem 0.5rem;
+        height: 18rem;
+        background: #fafafa;
+        border: 1px solid #ddd;
+      }
+      .chart-wrap[hidden],
+      pre[hidden] {
+        display: none;
+      }
     </style>
   </head>
   <body>
     <h1>Sample events</h1>
     <p>
       Set count and seed, then pick one action. Ingest writes to the database. Download only
-      returns the JSON file. Stats and samples read whatever is already stored.
+      returns the JSON file. Stats, samples, and the timeseries chart read whatever is already stored.
     </p>
     <form id="form">
       <label for="count">Count (148–20000)</label>
@@ -84,7 +102,7 @@
       <div class="actions">
         <div class="action">
           <h2>Ingest</h2>
-          <p>Stores events with <code>POST /v1/events/ingest</code>. Use this to fill stats and samples.</p>
+          <p>Stores events with <code>POST /v1/events/ingest</code>. Use this to fill stats, samples, and the chart.</p>
           <button id="submit" class="btn" type="submit">Generate and ingest</button>
         </div>
         <div class="action">
@@ -135,12 +153,36 @@
           <option>ALERT</option>
           <option>MONITOR</option>
         </select>
-        <div>
+        <div class="btn-spaced">
           <button id="loadSamples" class="btn" type="button">Load samples</button>
         </div>
         <pre id="samplesResults">No samples loaded.</pre>
       </div>
     </div>
+
+    <div class="action chart-panel">
+      <h2>Timeseries</h2>
+      <p><code>GET /v1/stats/timeseries</code> — event counts per UTC bucket, for a line chart.</p>
+      <label class="inline">
+        <input id="chartConfig" type="checkbox" />
+        Filter config 14227
+      </label>
+      <label for="chartInterval">Interval</label>
+      <select id="chartInterval">
+        <option value="1m">1m</option>
+        <option value="5m" selected>5m</option>
+        <option value="1h">1h</option>
+      </select>
+      <div class="btn-spaced">
+        <button id="loadChart" class="btn" type="button">Load timeseries</button>
+      </div>
+      <pre id="chartStatus">No timeseries loaded.</pre>
+      <div id="chartWrap" class="chart-wrap" hidden>
+        <canvas id="chartCanvas" aria-label="Event counts over time"></canvas>
+      </div>
+      <pre id="chartResults" hidden></pre>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <script>
       const form = document.getElementById("form");
       const countInput = document.getElementById("count");
@@ -156,9 +198,17 @@
       const samplesConfig = document.getElementById("samplesConfig");
       const samplesCategory = document.getElementById("samplesCategory");
       const samplesAction = document.getElementById("samplesAction");
+      const loadChart = document.getElementById("loadChart");
+      const chartConfig = document.getElementById("chartConfig");
+      const chartInterval = document.getElementById("chartInterval");
+      const chartStatus = document.getElementById("chartStatus");
+      const chartWrap = document.getElementById("chartWrap");
+      const chartCanvas = document.getElementById("chartCanvas");
+      const chartResults = document.getElementById("chartResults");
 
       const SPAN_MS = 24 * 60 * 60 * 1000;
       let lastWindow = null;
+      let lineChart = null;
 
       function setText(el, text) {
         el.textContent = text;
@@ -224,6 +274,118 @@
         } catch (err) {
           setText(statsResults, String(err));
         }
+      });
+
+      function hideChart() {
+        chartWrap.hidden = true;
+        if (lineChart) {
+          lineChart.destroy();
+          lineChart = null;
+        }
+      }
+
+      function drawChart(points) {
+        if (typeof Chart === "undefined") {
+          hideChart();
+          setText(chartResults, "Chart.js failed to load from the CDN.");
+          chartResults.hidden = false;
+          return;
+        }
+        chartWrap.hidden = false;
+        if (lineChart) {
+          lineChart.destroy();
+        }
+        lineChart = new Chart(chartCanvas, {
+          type: "line",
+          data: {
+            labels: points.map((point) => point.timestamp),
+            datasets: [
+              {
+                label: "Events",
+                data: points.map((point) => point.count),
+                borderColor: "#2563eb",
+                backgroundColor: "rgba(37, 99, 235, 0.15)",
+                fill: true,
+                tension: 0.25,
+                borderWidth: 2,
+                pointRadius: points.length > 80 ? 0 : 3,
+                pointHoverRadius: 5,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  title: (items) => items[0].label.replace("T", " ").replace("Z", " UTC"),
+                },
+              },
+            },
+            scales: {
+              x: {
+                ticks: {
+                  maxTicksLimit: 8,
+                  callback: function (value) {
+                    return this.getLabelForValue(value).slice(11, 16);
+                  },
+                },
+              },
+              y: {
+                beginAtZero: true,
+                ticks: { precision: 0 },
+                title: { display: true, text: "Events" },
+              },
+            },
+          },
+        });
+      }
+
+      async function loadTimeseries() {
+        const windowRange = queryWindow();
+        const params = new URLSearchParams({
+          from: windowRange.from,
+          to: windowRange.to,
+          interval: chartInterval.value,
+        });
+        if (chartConfig.checked) {
+          params.set("configId", "14227");
+        }
+        const url = "/v1/stats/timeseries?" + params.toString();
+        hideChart();
+        chartResults.hidden = true;
+        setText(chartStatus, "Loading " + url + " …");
+        try {
+          const response = await fetch(url);
+          const body = await response.text();
+          if (!response.ok) {
+            setText(chartStatus, "HTTP " + response.status);
+            setText(chartResults, "HTTP " + response.status + " " + url + "\n" + body);
+            chartResults.hidden = false;
+            return;
+          }
+          const data = JSON.parse(body);
+          if (!Array.isArray(data.points) || data.points.length === 0) {
+            setText(chartStatus, "HTTP " + response.status + " " + url + "\nNo buckets returned.");
+            return;
+          }
+          drawChart(data.points);
+          setText(
+            chartStatus,
+            "HTTP " + response.status + " " + url + "\n" + data.points.length + " buckets"
+          );
+        } catch (err) {
+          setText(chartStatus, "Failed");
+          setText(chartResults, String(err));
+          chartResults.hidden = false;
+        }
+      }
+
+      loadChart.addEventListener("click", () => {
+        loadTimeseries();
       });
 
       loadSamples.addEventListener("click", async () => {
@@ -307,6 +469,7 @@
             setText(results, "Stored " + stored + " / " + events.length + "…");
           }
           setText(results, "Stored " + stored + " events.\nSeed: " + seed);
+          await loadTimeseries();
         } catch (err) {
           setText(results, String(err));
         } finally {
