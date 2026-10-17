@@ -36,6 +36,8 @@ springdoc:
 app:
   ingest:
     max-batch-size: 1000
+  generator:
+    enabled: true
   stats:
     max-range: 31d
     query-threads: 6

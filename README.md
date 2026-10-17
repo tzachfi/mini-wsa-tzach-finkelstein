@@ -29,13 +29,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs `./mvnw -B verify` on pull requ
 
 ### Local (Maven + Postgres)
 
-1. Start Postgres (or use Compose for the database only):
-
-```bash
-docker compose up -d postgres
-```
-
-2. Build and run the app:
+`./mvnw spring-boot:run` uses `localhost:5432` from `application.yml`. Use any Postgres with database/user/password `miniwsa`. Compose Postgres is internal-only (no host `5432` mapping); `psql` from the host is `docker compose exec postgres psql -U miniwsa -d miniwsa`.
 
 ```bash
 ./mvnw verify
@@ -50,19 +44,75 @@ The API listens on `http://localhost:8080`.
 docker compose up --build
 ```
 
-If host ports `8080` or `5432` are already in use:
+Postgres stays on the Compose network only (`postgres:5432`). The host mapping that used to fail when 5432 was already allocated is gone. The app still publishes **8080**. If that port is taken:
 
 ```bash
-APP_PORT=18080 POSTGRES_PORT=5434 docker compose up --build
+APP_PORT=18080 docker compose up --build
 ```
 
 Make aliases: `make up`, `make down`, `make logs`.
+
+The demo page is [http://localhost:8080/](http://localhost:8080/). **Generate and ingest** calls `GET /v1/dev/events`, then posts each chunk to ingest. **Download JSON (no ingest)** is that same GET only — nothing is stored. **Load stats summary** and **Load samples** call `GET /v1/stats/summary` and `GET /v1/events/samples` on the last ingest window (or the last 24 hours).
+
+### Generate a JSON file (CLI)
+
+The generator has no Spring dependencies. Same `--seed` and `--end` produce byte-identical output. Default seed is **42**. Progress and the attacker summary go to stderr; the JSON array goes to stdout or `-o`.
+
+```bash
+./mvnw -q compile exec:java -Dexec.args='--count 10000 --seed 42 --span 24h --end 2026-06-02T00:00:00Z -o events.json'
+```
+
+Load a file at or under the live ingest cap (default **1000**, override with `APP_INGEST_MAX_BATCH_SIZE`):
+
+```bash
+curl -sS -X POST http://localhost:8080/v1/events/ingest \
+  -H 'Content-Type: application/json' \
+  --data-binary @events.json
+```
+
+Larger files must be sliced. Read the cap from `X-Max-Batch-Size` (do not assume 1000):
+
+```bash
+CAP=$(curl -sS -D - -o /tmp/events.json \
+  'http://localhost:8080/v1/dev/events?count=10000&seed=42&span=24h&end=2026-06-02T00:00:00Z' \
+  | awk 'tolower($1)=="x-max-batch-size:" {print $2}' | tr -d '\r')
+i=0
+len=$(jq 'length' /tmp/events.json)
+while [ "$i" -lt "$len" ]; do
+  jq -c ".[$i:$((i + CAP))]" /tmp/events.json \
+    | curl -sS -X POST http://localhost:8080/v1/events/ingest \
+        -H 'Content-Type: application/json' \
+        --data-binary @-
+  i=$((i + CAP))
+done
+```
+
+## Sample data (assignment Part 5)
+
+| Part 5 need | Where it lives |
+| --- | --- |
+| Realistic mix of categories, actions, and paths | Weighted background events plus pinned attack waves |
+| Repeat-offender / campaign waves | Showcase IPs `203.0.113.10`–`.12` and ~20% returning wave IPs |
+| Reproducible dataset | Seeded RNG; `eventId` is `evt-s{seed}-{index}` |
+| Configurable volume | `--count` / page count (CLI and GET: 148–100000; page caps at 20000) |
+| Load through the real ingest API | Demo page chunks on `X-Max-Batch-Size`; CLI writes a file for curl |
+| Demo without extra Compose services | Static `index.html` on `:8080` |
+
+A default 10k-event run has 50 wave IPs. Ranks 1–3 of `topAttackers` are always 40, 36, then 30 events (`203.0.113.10` two bursts on `/admin/users`, `.11` one burst on `/api/v1/login`, `.12` two bursts on `/api/v1/login`). `topTargetedPaths` starts at `/api/v1/login` (66) then `/admin/users` (40). Background IPs stay at most 4 events so they never enter the top 10.
 
 ## API docs
 
 Swagger UI: [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html)
 
 OpenAPI JSON: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-docs)
+
+### Generate — `GET /v1/dev/events`
+
+Returns a generated JSON **array** of ingest payloads and writes nothing. Gated by `app.generator.enabled` (default **true**); **404** when disabled. Query parameters: `count` (default 10000, range 148–100000), `seed` (default 42), `span` (default `24h`, 69m–31d; also accepts `PT24H`), `end` (default now, must not be in the future). Success sets `X-Max-Batch-Size` to the live ingest cap and `X-Generator-Summary` to the pinned and returning attackers. Invalid arguments return **400** problem details.
+
+```bash
+curl -sS 'http://localhost:8080/v1/dev/events?count=148&seed=42&span=24h&end=2026-06-02T00:00:00Z'
+```
 
 ### Ingest — `POST /v1/events/ingest`
 
@@ -236,7 +286,7 @@ The page and capped-id count run as one task on `statsQueryExecutor` and share i
 
 Layered Spring Boot service: `Controller` → `Service` → `Repository` → PostgreSQL.
 
-Packages: `config`, `controller`, `dto`, `model`, `repository`, `service`, `enrichment`, `exception`, `datagen`.
+Packages: `config`, `controller`, `dto`, `model`, `repository`, `service`, `enrichment`, `exception`, `generator`.
 
 A diagram will be added once ingestion, enrichment, and analytics APIs are in place.
 
@@ -253,6 +303,7 @@ PostgreSQL is the primary store: relational queries, JPQL aggregations for stats
 | `v0.2-enrichment` | Attack classification + `ThreatScoreCalculator` |
 | `v0.3-stats` | `GET /v1/stats/summary` (JPQL aggregations) |
 | `v0.4-samples` | `GET /v1/events/samples` pagination and filters |
+| `v0.5-generator` | Seeded event generator, CLI, demo page, `GET /v1/dev/events` |
 
 ## What I’d improve given more time
 
