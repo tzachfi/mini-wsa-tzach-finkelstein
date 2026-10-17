@@ -11,7 +11,7 @@ Context: coordinated campaign **Operation Shadow Flood** (SQL injection probes, 
 - Spring Web, Spring Data JPA, Bean Validation
 - PostgreSQL 16 (primary store)
 - H2 (ingest slice tests)
-- Testcontainers PostgreSQL (stats API integration tests)
+- Testcontainers PostgreSQL (stats and samples API integration tests)
 - Springdoc OpenAPI (Swagger UI)
 - Docker / Docker Compose
 
@@ -174,7 +174,63 @@ Example:
 }
 ```
 
-Three JPQL aggregations (category×action, top attackers, top paths) run in parallel, so latency is the slowest query rather than the sum; that triples concurrent database load per request and helps latency, not throughput. The three scans share `app.stats.query-threads` workers (default **6**) and a queue of `app.stats.query-queue-capacity` (default **6**). Hikari’s `maximum-pool-size` is **10**, so ingest keeps the remaining connections. When the worker pool and queue are full, the request returns **503** with `Retry-After: 2` instead of running the scan on the Tomcat thread. A present `configId` uses `e.configId = :configId` so Postgres can pick `idx_se_config_ts`; omit `configId` to scan `idx_se_ts`. Category and action counts come from one `GROUP BY e.rule.category, e.action` (at most 21 buckets), then `StatsService` sums those buckets. Totals and the root average are derived from the category sums, not a fourth query. Top-N uses Spring Data `Limit.of(10)` and returns a `List` (never `Page`, which would emit a derived count query).
+Three JPQL aggregations (category×action, top attackers, top paths) run in parallel, so latency is the slowest query rather than the sum; that triples concurrent database load per request and helps latency, not throughput. The three scans share `app.stats.query-threads` workers (default **6**) and a queue of `app.stats.query-queue-capacity` (default **6**) with samples. Hikari’s `maximum-pool-size` is **10**, so ingest keeps the remaining connections. When the worker pool and queue are full, the request returns **503** with `Retry-After: 2` instead of running the scan on the Tomcat thread. A present `configId` uses `e.configId = :configId` so Postgres can pick `idx_se_config_ts`; omit `configId` to scan `idx_se_ts`. Category and action counts come from one `GROUP BY e.rule.category, e.action` (at most 21 buckets), then `StatsService` sums those buckets. Totals and the root average are derived from the category sums, not a fourth query. Top-N uses Spring Data `Limit.of(10)` and returns a `List` (never `Page`, which would emit a derived count query).
+
+### Samples — `GET /v1/events/samples`
+
+Returns individual enriched events matching optional filters, newest first. Every query parameter is optional; present filters are combined with AND. An omitted filter is left out of the `WHERE` clause.
+
+| Parameter | Meaning |
+| --- | --- |
+| `configId` | equality on `configId` |
+| `from` | `timestamp >= from` |
+| `to` | `timestamp < to` |
+| `category` | equality on `rule.category` |
+| `action` | equality on `action` |
+| `limit` | page size, default **20**, range **1..100** |
+| `offset` | skip count, default **0**, range **0..10000** |
+
+`from` and `to` are independent ISO-8601 instants with an offset. Both together are the same half-open window as stats (`[from, to)`). There is no 31-day cap. Order is `timestamp DESC, id DESC`.
+
+The `SELECT` always runs. `total` is then either inferred or counted, and never walks more than **10_100** rows (`MAX_OFFSET + MAX_LIMIT`). A default unfiltered call does not `COUNT(*)` the table.
+
+- `n < limit` (including an empty first page) → skip the count, `total = offset + n`, `totalExact: true`
+- `n == limit` or `n == 0` with `offset > 0` → `SELECT id` with the same predicates, `LIMIT 10101`
+  - `<= 10_100` rows → that count, `totalExact: true`
+  - `10_101` rows → `total: 10100`, `totalExact: false` (at least this many; nobody can page past that)
+
+`limit` and `offset` in the body are the applied values (defaults included). Empty matches return **200** with `"events": []`.
+
+```bash
+curl -sS 'http://localhost:8080/v1/events/samples?configId=14227&from=2026-06-01T00:00:00Z&to=2026-06-02T00:00:00Z&category=INJECTION&action=DENY&limit=20&offset=0'
+```
+
+Example:
+
+```json
+{
+  "events": [
+    {
+      "id": 2,
+      "eventId": "evt-00132",
+      "timestamp": "2026-06-01T14:32:10Z",
+      "configId": 14227,
+      "path": "/api/v1/login",
+      "action": "DENY",
+      "attackType": "SQL/Command Injection",
+      "threatScore": 75
+    }
+  ],
+  "total": 1,
+  "totalExact": true,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+Domain rejects return **400** with the ingest `errors` array (`detail` is `Validation failed`). All violations are listed: `limit` outside 1..100, `offset` outside 0..10000, and both bounds present with `from >= to`. A value that does not parse (`limit=abc`, an unknown enum, an instant with no offset) keeps the shared type-mismatch body (`Invalid value for parameter '…'`, no `errors` array) and never reaches the service.
+
+The page and capped-id count run as one task on `statsQueryExecutor` and share its 6 workers and queue with stats. When the executor is full, the request returns the same **503** with `Retry-After: 2`. Present `configId` can use `idx_se_config_ts`; omit it to scan `idx_se_ts`. `category` and `action` stay unindexed. The count selects `id` and stops after 10_101 rows, so it can use those indexes instead of a full-table `COUNT(*)`.
 
 ## Architecture
 
@@ -186,7 +242,7 @@ A diagram will be added once ingestion, enrichment, and analytics APIs are in pl
 
 ## Storage justification
 
-PostgreSQL is the primary store: relational queries, JPQL aggregations for stats, and composite indexes `(config_id, event_timestamp, id)`, `(event_timestamp, id)`, and `(client_ip, event_timestamp)` keep time-bounded scans and the ingest repeat-offender check efficient at assignment scale. `path` is deliberately **not** indexed — top-path `GROUP BY` runs after the time-range filter. H2 is used for ingest API tests; stats summary is proven against Postgres via Testcontainers.
+PostgreSQL is the primary store: relational queries, JPQL aggregations for stats, and composite indexes `(config_id, event_timestamp, id)`, `(event_timestamp, id)`, and `(client_ip, event_timestamp)` keep time-bounded scans and the ingest repeat-offender check efficient at assignment scale. `path` is deliberately **not** indexed — top-path `GROUP BY` runs after the time-range filter. H2 is used for ingest API tests; stats summary and samples pagination are proven against Postgres via Testcontainers.
 
 ## Git tags / milestones
 

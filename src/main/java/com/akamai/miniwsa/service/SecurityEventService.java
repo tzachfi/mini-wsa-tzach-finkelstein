@@ -37,7 +37,7 @@ public class SecurityEventService {
         enrich(entities);
         var saved = securityEventRepository.saveAll(entities);
         log.info("Ingested {} security event(s)", saved.size());
-        return saved.stream().map(this::toResponse).toList();
+        return saved.stream().map(EventResponseMapper::toResponse).toList();
     }
 
     private void enrich(List<SecurityEvent> events) {
@@ -113,37 +113,5 @@ public class SecurityEventService {
             return null;
         }
         return GeoLocationEmbeddable.builder().country(geo.country()).city(geo.city()).build();
-    }
-
-    private EventResponse toResponse(SecurityEvent event) {
-        var rule = event.getRule();
-        var geo = event.getGeoLocation();
-        return new EventResponse(
-                event.getId(),
-                event.getEventId(),
-                event.getTimestamp(),
-                event.getConfigId(),
-                event.getPolicyId(),
-                event.getClientIp(),
-                event.getHostname(),
-                event.getPath(),
-                event.getMethod(),
-                event.getStatusCode(),
-                event.getUserAgent(),
-                rule == null
-                        ? null
-                        : new EventResponse.RuleResponse(
-                                rule.getId(),
-                                rule.getName(),
-                                rule.getMessage(),
-                                rule.getSeverity(),
-                                rule.getCategory()),
-                event.getAction(),
-                geo == null ? null : new EventResponse.GeoLocationResponse(geo.getCountry(), geo.getCity()),
-                event.getRequestSize(),
-                event.getResponseSize(),
-                event.getReceivedAt(),
-                event.getAttackType(),
-                event.getThreatScore());
     }
 }
