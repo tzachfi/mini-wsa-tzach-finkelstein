@@ -1,5 +1,6 @@
 package com.akamai.miniwsa.exception;
 
+import com.akamai.miniwsa.generator.EventGenerator.GeneratorException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -27,6 +28,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(InvalidRequestShapeException.class)
     ProblemDetail handleInvalidShape(InvalidRequestShapeException ex) {
+        var problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setTitle("Bad Request");
+        return problem;
+    }
+
+    @ExceptionHandler(GeneratorException.class)
+    ProblemDetail handleGenerator(GeneratorException ex) {
         var problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
         problem.setTitle("Bad Request");
         return problem;

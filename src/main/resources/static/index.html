@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mini WSA — generate events</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 52rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.4;
+      }
+      label {
+        display: block;
+        margin: 0.75rem 0 0.25rem;
+      }
+      input:not([type="checkbox"]),
+      select {
+        width: 16rem;
+        padding: 0.35rem 0.5rem;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+        margin-top: 1.25rem;
+      }
+      .action {
+        flex: 1 1 16rem;
+        padding: 0.9rem 1rem;
+        border: 1px solid #ccc;
+      }
+      .action h2 {
+        margin: 0 0 0.35rem;
+        font-size: 1rem;
+      }
+      .action p {
+        margin: 0 0 0.75rem;
+        color: #444;
+      }
+      button.btn {
+        display: inline-block;
+        font: inherit;
+        color: inherit;
+        background: #f8f8f8;
+        border: 1px solid #888;
+        border-radius: 4px;
+        padding: 0.45rem 0.9rem;
+        margin-top: 0;
+        cursor: pointer;
+      }
+      button.btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+      label.inline {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        margin: 0 0 0.75rem;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 0.75rem;
+        overflow: auto;
+        white-space: pre-wrap;
+        min-height: 4rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Sample events</h1>
+    <p>
+      Set count and seed, then pick one action. Ingest writes to the database. Download only
+      returns the JSON file. Stats and samples read whatever is already stored.
+    </p>
+    <form id="form">
+      <label for="count">Count (148–20000)</label>
+      <input id="count" name="count" type="number" min="148" max="20000" value="10000" required />
+      <label for="seed">Seed (optional; a random seed is chosen if empty)</label>
+      <input id="seed" name="seed" type="text" inputmode="numeric" placeholder="random" />
+      <div class="actions">
+        <div class="action">
+          <h2>Ingest</h2>
+          <p>Stores events with <code>POST /v1/events/ingest</code>. Use this to fill stats and samples.</p>
+          <button id="submit" class="btn" type="submit">Generate and ingest</button>
+        </div>
+        <div class="action">
+          <h2>Download</h2>
+          <p>Saves the JSON only. <strong>Does not store anything.</strong> Same file as <code>GET /v1/dev/events</code>.</p>
+          <button id="download" class="btn" type="button">Download JSON (no ingest)</button>
+        </div>
+      </div>
+    </form>
+    <pre id="results">No ingest run yet.</pre>
+
+    <h2>Stats and samples</h2>
+    <div class="actions">
+      <div class="action">
+        <h2>Stats (v0.3)</h2>
+        <p><code>GET /v1/stats/summary</code> — top attackers, paths, and category counts.</p>
+        <label class="inline">
+          <input id="statsConfig" type="checkbox" />
+          Filter config 14227
+        </label>
+        <div>
+          <button id="loadStats" class="btn" type="button">Load stats summary</button>
+        </div>
+        <pre id="statsResults">No stats loaded.</pre>
+      </div>
+      <div class="action">
+        <h2>Samples (v0.4)</h2>
+        <p><code>GET /v1/events/samples</code> — first page of matching events.</p>
+        <label class="inline">
+          <input id="samplesConfig" type="checkbox" />
+          Filter config 14227
+        </label>
+        <label for="samplesCategory">Category (optional)</label>
+        <select id="samplesCategory">
+          <option value="">All</option>
+          <option>INJECTION</option>
+          <option>XSS</option>
+          <option>PROTOCOL_VIOLATION</option>
+          <option>DATA_LEAKAGE</option>
+          <option>BOT</option>
+          <option>DOS</option>
+          <option>RATE_LIMIT</option>
+        </select>
+        <label for="samplesAction">Action (optional)</label>
+        <select id="samplesAction">
+          <option value="">All</option>
+          <option>DENY</option>
+          <option>ALERT</option>
+          <option>MONITOR</option>
+        </select>
+        <div>
+          <button id="loadSamples" class="btn" type="button">Load samples</button>
+        </div>
+        <pre id="samplesResults">No samples loaded.</pre>
+      </div>
+    </div>
+    <script>
+      const form = document.getElementById("form");
+      const countInput = document.getElementById("count");
+      const seedInput = document.getElementById("seed");
+      const submit = document.getElementById("submit");
+      const results = document.getElementById("results");
+      const download = document.getElementById("download");
+      const loadStats = document.getElementById("loadStats");
+      const loadSamples = document.getElementById("loadSamples");
+      const statsResults = document.getElementById("statsResults");
+      const samplesResults = document.getElementById("samplesResults");
+      const statsConfig = document.getElementById("statsConfig");
+      const samplesConfig = document.getElementById("samplesConfig");
+      const samplesCategory = document.getElementById("samplesCategory");
+      const samplesAction = document.getElementById("samplesAction");
+
+      const SPAN_MS = 24 * 60 * 60 * 1000;
+      let lastWindow = null;
+
+      function setText(el, text) {
+        el.textContent = text;
+      }
+
+      function generateUrl(count, seed, end) {
+        const params = new URLSearchParams({
+          count: String(count),
+          seed: String(seed),
+          span: "24h",
+        });
+        if (end) {
+          params.set("end", end);
+        }
+        return "/v1/dev/events?" + params.toString();
+      }
+
+      function readCount() {
+        const count = Number(countInput.value);
+        if (!Number.isInteger(count) || count < 148 || count > 20000) {
+          return null;
+        }
+        return count;
+      }
+
+      function resolveSeed() {
+        const typed = seedInput.value.trim();
+        if (typed !== "") {
+          return typed;
+        }
+        return String(Math.floor(Math.random() * 1_000_000_000));
+      }
+
+      function queryWindow() {
+        if (lastWindow) {
+          return lastWindow;
+        }
+        const to = new Date();
+        return { from: new Date(to.getTime() - SPAN_MS).toISOString(), to: to.toISOString() };
+      }
+
+      download.addEventListener("click", () => {
+        const count = readCount();
+        if (count == null) {
+          setText(results, "Count must be an integer between 148 and 20000.");
+          return;
+        }
+        window.location.href = generateUrl(count, resolveSeed());
+      });
+
+      loadStats.addEventListener("click", async () => {
+        const windowRange = queryWindow();
+        const params = new URLSearchParams({ from: windowRange.from, to: windowRange.to });
+        if (statsConfig.checked) {
+          params.set("configId", "14227");
+        }
+        const url = "/v1/stats/summary?" + params.toString();
+        setText(statsResults, "Loading " + url + " …");
+        try {
+          const response = await fetch(url);
+          const body = await response.text();
+          setText(statsResults, "HTTP " + response.status + " " + url + "\n" + body);
+        } catch (err) {
+          setText(statsResults, String(err));
+        }
+      });
+
+      loadSamples.addEventListener("click", async () => {
+        const windowRange = queryWindow();
+        const params = new URLSearchParams({
+          from: windowRange.from,
+          to: windowRange.to,
+          limit: "20",
+          offset: "0",
+        });
+        if (samplesConfig.checked) {
+          params.set("configId", "14227");
+        }
+        if (samplesCategory.value) {
+          params.set("category", samplesCategory.value);
+        }
+        if (samplesAction.value) {
+          params.set("action", samplesAction.value);
+        }
+        const url = "/v1/events/samples?" + params.toString();
+        setText(samplesResults, "Loading " + url + " …");
+        try {
+          const response = await fetch(url);
+          const body = await response.text();
+          setText(samplesResults, "HTTP " + response.status + " " + url + "\n" + body);
+        } catch (err) {
+          setText(samplesResults, String(err));
+        }
+      });
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const count = readCount();
+        if (count == null) {
+          setText(results, "Count must be an integer between 148 and 20000.");
+          return;
+        }
+        const seed = resolveSeed();
+        const end = new Date().toISOString();
+        lastWindow = { from: new Date(Date.parse(end) - SPAN_MS).toISOString(), to: end };
+        const url = generateUrl(count, seed, end);
+        submit.disabled = true;
+        setText(results, "Fetching " + count + " events (seed " + seed + "), then ingesting…");
+        try {
+          const generated = await fetch(url);
+          if (!generated.ok) {
+            setText(results, "Generate failed: HTTP " + generated.status + "\n" + (await generated.text()));
+            return;
+          }
+          const batchSize = Number(generated.headers.get("X-Max-Batch-Size") || "1000");
+          const events = await generated.json();
+          let stored = 0;
+          for (let i = 0; i < events.length; i += batchSize) {
+            const chunk = events.slice(i, i + batchSize);
+            const ingest = await fetch("/v1/events/ingest", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(chunk),
+            });
+            if (ingest.status !== 201) {
+              const hint =
+                ingest.status === 409
+                  ? "\nThese event IDs already exist. Choose a different seed and try again."
+                  : "";
+              setText(
+                results,
+                "Stopped after storing " +
+                  stored +
+                  " of " +
+                  events.length +
+                  " events (HTTP " +
+                  ingest.status +
+                  " on a chunk).\nSeed: " +
+                  seed +
+                  hint
+              );
+              return;
+            }
+            const body = await ingest.json();
+            stored += Array.isArray(body) ? body.length : 0;
+            setText(results, "Stored " + stored + " / " + events.length + "…");
+          }
+          setText(results, "Stored " + stored + " events.\nSeed: " + seed);
+        } catch (err) {
+          setText(results, String(err));
+        } finally {
+          submit.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

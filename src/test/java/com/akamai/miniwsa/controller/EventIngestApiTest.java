@@ -322,6 +322,15 @@ class EventIngestApiTest {
                 .andExpect(jsonPath("$.detail").value("An event with this eventId already exists"));
     }
 
+    @Test
+    void ingestIpv6ClientIpReturns201() throws Exception {
+        mockMvc.perform(post(INGEST_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(eventJson("evt-ipv6-001", "2001:db8:1::1", "/api/v1/items/0", "2026-05-20T14:32:10Z")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$[0].clientIp").value("2001:db8:1::1"));
+    }
+
     private static String eventJson(String eventId) {
         return eventJson(eventId, "203.0.113.42", "/api/v1/login", "2026-05-20T14:32:10Z");
     }
