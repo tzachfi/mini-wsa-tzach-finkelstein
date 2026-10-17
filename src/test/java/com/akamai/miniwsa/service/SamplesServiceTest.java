@@ -1,8 +1,10 @@
 package com.akamai.miniwsa.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,11 +16,13 @@ import com.akamai.miniwsa.repository.SampleFilter;
 import com.akamai.miniwsa.repository.SecurityEventRepository;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.RejectedExecutionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.task.TaskRejectedException;
 
 @ExtendWith(MockitoExtension.class)
 class SamplesServiceTest {
@@ -32,7 +36,7 @@ class SamplesServiceTest {
 
     @BeforeEach
     void setUp() {
-        samplesService = new SamplesService(securityEventRepository);
+        samplesService = new SamplesService(securityEventRepository, Runnable::run);
     }
 
     @Test
@@ -83,6 +87,19 @@ class SamplesServiceTest {
         assertEquals(20, response.limit());
         assertEquals(100, response.offset());
         verify(securityEventRepository).countMatching(eq(EMPTY_FILTER));
+    }
+
+    @Test
+    void saturatingExecutorThrowsTaskRejectedExceptionWithoutQuerying() {
+        var samplesService = new SamplesService(securityEventRepository, command -> {
+            throw new TaskRejectedException("full", new RejectedExecutionException("full"));
+        });
+
+        assertThrows(
+                TaskRejectedException.class, () -> samplesService.sample(null, null, null, null, null, 20, 0));
+
+        verify(securityEventRepository, never()).findPage(any(), anyInt(), anyInt());
+        verify(securityEventRepository, never()).countMatching(any());
     }
 
     private static SecurityEvent event(long id) {

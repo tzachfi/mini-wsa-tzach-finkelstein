@@ -174,7 +174,7 @@ Example:
 }
 ```
 
-Three JPQL aggregations (category×action, top attackers, top paths) run in parallel, so latency is the slowest query rather than the sum; that triples concurrent database load per request and helps latency, not throughput. The three scans share `app.stats.query-threads` workers (default **6**) and a queue of `app.stats.query-queue-capacity` (default **6**). Hikari’s `maximum-pool-size` is **10**, so ingest keeps the remaining connections. When the worker pool and queue are full, the request returns **503** with `Retry-After: 2` instead of running the scan on the Tomcat thread. A present `configId` uses `e.configId = :configId` so Postgres can pick `idx_se_config_ts`; omit `configId` to scan `idx_se_ts`. Category and action counts come from one `GROUP BY e.rule.category, e.action` (at most 21 buckets), then `StatsService` sums those buckets. Totals and the root average are derived from the category sums, not a fourth query. Top-N uses Spring Data `Limit.of(10)` and returns a `List` (never `Page`, which would emit a derived count query).
+Three JPQL aggregations (category×action, top attackers, top paths) run in parallel, so latency is the slowest query rather than the sum; that triples concurrent database load per request and helps latency, not throughput. The three scans share `app.stats.query-threads` workers (default **6**) and a queue of `app.stats.query-queue-capacity` (default **6**) with samples. Hikari’s `maximum-pool-size` is **10**, so ingest keeps the remaining connections. When the worker pool and queue are full, the request returns **503** with `Retry-After: 2` instead of running the scan on the Tomcat thread. A present `configId` uses `e.configId = :configId` so Postgres can pick `idx_se_config_ts`; omit `configId` to scan `idx_se_ts`. Category and action counts come from one `GROUP BY e.rule.category, e.action` (at most 21 buckets), then `StatsService` sums those buckets. Totals and the root average are derived from the category sums, not a fourth query. Top-N uses Spring Data `Limit.of(10)` and returns a `List` (never `Page`, which would emit a derived count query).
 
 ### Samples — `GET /v1/events/samples`
 
@@ -188,7 +188,7 @@ Returns individual enriched events matching optional filters, newest first. Ever
 | `category` | equality on `rule.category` |
 | `action` | equality on `action` |
 | `limit` | page size, default **20**, range **1..100** |
-| `offset` | skip count, default **0**, 32-bit `int` with no extra ceiling |
+| `offset` | skip count, default **0**, range **0..10000** |
 
 `from` and `to` are independent ISO-8601 instants with an offset. Both together are the same half-open window as stats (`[from, to)`). There is no 31-day cap. Order is `timestamp DESC, id DESC`.
 
@@ -226,9 +226,9 @@ Example:
 }
 ```
 
-Domain rejects return **400** with the ingest `errors` array (`detail` is `Validation failed`). All violations are listed: `limit` outside 1..100, `offset < 0`, and both bounds present with `from >= to`. A value that does not parse (`limit=abc`, an unknown enum, an instant with no offset) keeps the shared type-mismatch body (`Invalid value for parameter '…'`, no `errors` array) and never reaches the service.
+Domain rejects return **400** with the ingest `errors` array (`detail` is `Validation failed`). All violations are listed: `limit` outside 1..100, `offset` outside 0..10000, and both bounds present with `from >= to`. A value that does not parse (`limit=abc`, an unknown enum, an instant with no offset) keeps the shared type-mismatch body (`Invalid value for parameter '…'`, no `errors` array) and never reaches the service.
 
-The page and count queries run sequentially on the request thread and do not use `statsQueryExecutor`. Present `configId` can use `idx_se_config_ts`; omit it to scan `idx_se_ts`. `category` and `action` stay unindexed.
+The page and count queries run as one task on `statsQueryExecutor` and share its 6 workers and queue with stats. When the executor is full, the request returns the same **503** with `Retry-After: 2`. Present `configId` can use `idx_se_config_ts`; omit it to scan `idx_se_ts`. `category` and `action` stay unindexed.
 
 ## Architecture
 

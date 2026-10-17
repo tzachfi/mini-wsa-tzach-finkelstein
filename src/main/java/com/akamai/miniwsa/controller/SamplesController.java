@@ -33,8 +33,8 @@ public class SamplesController {
         if (limit < 1 || limit > 100) {
             errors.add(new EventValidationException.FieldError("limit", "must be between 1 and 100"));
         }
-        if (offset < 0) {
-            errors.add(new EventValidationException.FieldError("offset", "must be greater than or equal to 0"));
+        if (offset < 0 || offset > 10_000) {
+            errors.add(new EventValidationException.FieldError("offset", "must be between 0 and 10000"));
         }
         if (from != null && to != null && !from.isBefore(to)) {
             errors.add(new EventValidationException.FieldError("from", "'from' must be before 'to'"));

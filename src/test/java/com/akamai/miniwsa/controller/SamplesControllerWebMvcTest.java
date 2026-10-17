@@ -6,6 +6,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -13,11 +14,13 @@ import com.akamai.miniwsa.dto.SamplesResponse;
 import com.akamai.miniwsa.exception.GlobalExceptionHandler;
 import com.akamai.miniwsa.service.SamplesService;
 import java.util.List;
+import java.util.concurrent.RejectedExecutionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -68,7 +71,7 @@ class SamplesControllerWebMvcTest {
     @Test
     void offsetNegativeReturns400WithFieldError() throws Exception {
         expectDomainErrors(
-                get(SAMPLES_URL).param("offset", "-1"), "offset", "must be greater than or equal to 0");
+                get(SAMPLES_URL).param("offset", "-1"), "offset", "must be between 0 and 10000");
         verify(samplesService, never()).sample(any(), any(), any(), any(), any(), anyInt(), anyInt());
     }
 
@@ -76,6 +79,19 @@ class SamplesControllerWebMvcTest {
     void offsetZeroCallsService() throws Exception {
         mockMvc.perform(get(SAMPLES_URL).param("offset", "0")).andExpect(status().isOk());
         verify(samplesService).sample(null, null, null, null, null, 20, 0);
+    }
+
+    @Test
+    void offset10000CallsService() throws Exception {
+        mockMvc.perform(get(SAMPLES_URL).param("offset", "10000")).andExpect(status().isOk());
+        verify(samplesService).sample(null, null, null, null, null, 20, 10_000);
+    }
+
+    @Test
+    void offset10001Returns400WithFieldError() throws Exception {
+        expectDomainErrors(
+                get(SAMPLES_URL).param("offset", "10001"), "offset", "must be between 0 and 10000");
+        verify(samplesService, never()).sample(any(), any(), any(), any(), any(), anyInt(), anyInt());
     }
 
     @Test
@@ -92,7 +108,7 @@ class SamplesControllerWebMvcTest {
                 .andExpect(jsonPath("$.errors[0].field").value("limit"))
                 .andExpect(jsonPath("$.errors[0].message").value("must be between 1 and 100"))
                 .andExpect(jsonPath("$.errors[1].field").value("offset"))
-                .andExpect(jsonPath("$.errors[1].message").value("must be greater than or equal to 0"))
+                .andExpect(jsonPath("$.errors[1].message").value("must be between 0 and 10000"))
                 .andExpect(jsonPath("$.errors[2].field").value("from"))
                 .andExpect(jsonPath("$.errors[2].message").value("'from' must be before 'to'"));
         verify(samplesService, never()).sample(any(), any(), any(), any(), any(), anyInt(), anyInt());
@@ -114,6 +130,19 @@ class SamplesControllerWebMvcTest {
     void instantWithoutOffsetReturnsTypeMismatchWithoutErrors() throws Exception {
         expectTypeMismatch(get(SAMPLES_URL).param("from", "2026-06-01T00:00:00"), "from");
         verify(samplesService, never()).sample(any(), any(), any(), any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    void rejectedExecutionReturns503WithRetryAfter() throws Exception {
+        when(samplesService.sample(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+                .thenThrow(new TaskRejectedException("full", new RejectedExecutionException("full")));
+
+        mockMvc.perform(get(SAMPLES_URL))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Retry-After", "2"))
+                .andExpect(jsonPath("$.status").value(503))
+                .andExpect(jsonPath("$.title").value("Service Unavailable"))
+                .andExpect(jsonPath("$.detail").isString());
     }
 
     private ResultActions expectDomainErrors(

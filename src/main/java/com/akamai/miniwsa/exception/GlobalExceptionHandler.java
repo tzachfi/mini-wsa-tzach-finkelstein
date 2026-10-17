@@ -41,9 +41,9 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(TaskRejectedException.class)
     ResponseEntity<ProblemDetail> handleRejected(TaskRejectedException ex) {
-        log.warn("Stats query executor at capacity", ex);
+        log.warn("Stats and samples query executor at capacity", ex);
         var problem = ProblemDetail.forStatusAndDetail(
-                HttpStatus.SERVICE_UNAVAILABLE, "Stats queries are at capacity; retry shortly");
+                HttpStatus.SERVICE_UNAVAILABLE, "Stats and samples queries are at capacity; retry shortly");
         problem.setTitle("Service Unavailable");
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .header(HttpHeaders.RETRY_AFTER, "2")
