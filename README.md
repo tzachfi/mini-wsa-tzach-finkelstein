@@ -102,13 +102,9 @@ A default 10k-event run has 50 wave IPs. Ranks 1–3 of `topAttackers` are alway
 
 ## API docs
 
-Swagger UI: [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html)
-
-OpenAPI JSON: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-docs)
+Interactive contract: [Swagger UI](http://localhost:8080/swagger-ui.html). Machine-readable: [OpenAPI JSON](http://localhost:8080/v3/api-docs).
 
 ### Generate — `GET /v1/dev/events`
-
-Returns a generated JSON **array** of ingest payloads and writes nothing. Gated by `app.generator.enabled` (default **true**); **404** when disabled. Query parameters: `count` (default 10000, range 148–100000), `seed` (default 42), `span` (default `24h`, 69m–31d; also accepts `PT24H`), `end` (default now, must not be in the future). Success sets `X-Max-Batch-Size` to the live ingest cap and `X-Generator-Summary` to the pinned and returning attackers. Invalid arguments return **400** problem details.
 
 ```bash
 curl -sS 'http://localhost:8080/v1/dev/events?count=148&seed=42&span=24h&end=2026-06-02T00:00:00Z'
@@ -116,199 +112,29 @@ curl -sS 'http://localhost:8080/v1/dev/events?count=148&seed=42&span=24h&end=202
 
 ### Ingest — `POST /v1/events/ingest`
 
-Accepts a single event object or an array of events. Always returns **201** with a JSON **array** of stored events (a single ingest is `[one]`). The server sets `receivedAt` and computes `attackType` and `threatScore`. Client-supplied `receivedAt` / enrichment fields are ignored.
-
-Arrays larger than `app.ingest.max-batch-size` (default **1000**) return **400**; nothing is written. Validation failures return **400** RFC 7807 Problem Details. Duplicate `eventId` returns **409**.
-
-There is no JSON body-size filter: Tomcat `maxPostSize` only limits form-encoded parsing, not a JSON body Spring reads from the input stream. A real cap would check `Content-Length` and wrap the input stream.
-
-Single event:
-
-```bash
-curl -sS -X POST http://localhost:8080/v1/events/ingest \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "eventId": "evt-00132",
-    "timestamp": "2026-05-20T14:32:10Z",
-    "configId": 14227,
-    "policyId": "pol_web1",
-    "clientIp": "203.0.113.42",
-    "hostname": "www.example.com",
-    "path": "/api/v1/login",
-    "method": "POST",
-    "statusCode": 403,
-    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "rule": {
-      "id": "950001",
-      "name": "SQL_INJECTION",
-      "message": "SQL Injection Attack Detected",
-      "severity": "CRITICAL",
-      "category": "INJECTION"
-    },
-    "action": "DENY",
-    "geoLocation": { "country": "CN", "city": "Beijing" },
-    "requestSize": 1024,
-    "responseSize": 256
-  }'
-```
-
-Batch:
-
 ```bash
 curl -sS -X POST http://localhost:8080/v1/events/ingest \
   -H 'Content-Type: application/json' \
   -d '[{ "eventId": "evt-00133", "timestamp": "2026-05-20T14:32:10Z", "configId": 14227, "clientIp": "203.0.113.42", "path": "/login", "rule": { "severity": "HIGH", "category": "BOT" }, "action": "ALERT" }]'
 ```
 
-### Enrichment
-
-Every ingested event is classified and scored before persist. `attackType` is a display string from `rule.category`:
-
-| `rule.category` | `attackType` |
-| --- | --- |
-| `INJECTION` | SQL/Command Injection |
-| `XSS` | Cross-Site Scripting |
-| `PROTOCOL_VIOLATION` | Protocol Anomaly |
-| `DATA_LEAKAGE` | Data Exfiltration |
-| `BOT` | Bot Activity |
-| `DOS` | Denial of Service |
-| `RATE_LIMIT` | Rate Limiting |
-
-`threatScore` is the sum of:
-
-- Severity base: CRITICAL 40, HIGH 30, MEDIUM 20, LOW 10
-- Action bonus: DENY +20, ALERT +10, MONITOR +0
-- Path bonus: path contains `/admin` or `/login` → +15
-- Repeat-offender bonus: +15 when `priorEventCount + 1 > 5` (more than 5 events from the same `clientIp` in the window)
-
-The repeat window is inclusive `[timestamp − 10 minutes, timestamp]`. Priors are stored rows for that IP plus **earlier siblings in the same batch** (stable-sorted by timestamp; response order stays the request order). Ingest loads history in **one** query: each distinct IP contributes its own `[minTs − 10m, maxTs]` predicate, OR-ed together so `idx_se_ip_ts` can BitmapOr the ranges. Results are ordered by IP then timestamp and binary-searched per event in memory. A later step is a per-event SQL count; a Redis/stream-state sliding window remains the option at real scale.
-
-Scores are capped at 100 (`Math.min(100, raw)`). Today's formula max is 90 (CRITICAL + DENY + path + repeat); 100 is reserved for later bonuses.
-
 ### Stats — `GET /v1/stats/summary`
-
-Aggregates stored events for an optional `configId` and a required half-open time window on event `timestamp` (`[from, to)`). Omit `configId` to aggregate across all configurations; the response still includes `configId: null`.
-
-`from` and `to` are required ISO-8601 instants with an offset. `from` must be strictly before `to`. The window may be at most `app.stats.max-range` (default **31d**, exact `Duration.ofDays(31)`); longer ranges return **400**. Empty matches return **200** with zero-filled maps, `avgThreatScore: null`, and empty top lists.
-
-`byCategory` always contains all seven `RuleCategory` keys and `byAction` all three `Action` keys (stable dashboard shape). Averages are rounded to one decimal, half-up; an average of zero events is `null`, not `0`. Top attackers are the top 10 by count, then avg threat score descending, then `clientIp` ascending. Top paths are the top 10 by count, then `path` ascending.
 
 ```bash
 curl -sS 'http://localhost:8080/v1/stats/summary?configId=14227&from=2026-06-01T00:00:00Z&to=2026-06-02T00:00:00Z'
 ```
 
-Example:
-
-```json
-{
-  "configId": 14227,
-  "timeRange": { "from": "2026-06-01T00:00:00Z", "to": "2026-06-02T00:00:00Z" },
-  "totalEvents": 4,
-  "avgThreatScore": 56.3,
-  "byCategory": {
-    "INJECTION": { "count": 2, "avgThreatScore": 75.0 },
-    "XSS": { "count": 1, "avgThreatScore": 35.0 },
-    "PROTOCOL_VIOLATION": { "count": 0, "avgThreatScore": null },
-    "DATA_LEAKAGE": { "count": 0, "avgThreatScore": null },
-    "BOT": { "count": 1, "avgThreatScore": 40.0 },
-    "DOS": { "count": 0, "avgThreatScore": null },
-    "RATE_LIMIT": { "count": 0, "avgThreatScore": null }
-  },
-  "byAction": { "DENY": 2, "ALERT": 1, "MONITOR": 1 },
-  "topAttackers": [
-    { "clientIp": "203.0.113.42", "count": 3, "avgThreatScore": 61.7 }
-  ],
-  "topTargetedPaths": [
-    { "path": "/api/v1/login", "count": 2 }
-  ]
-}
-```
-
-Three JPQL aggregations (category×action, top attackers, top paths) run in parallel, so latency is the slowest query rather than the sum; that triples concurrent database load per request and helps latency, not throughput. The three scans share `app.stats.query-threads` workers (default **6**) and a queue of `app.stats.query-queue-capacity` (default **6**) with samples. Hikari’s `maximum-pool-size` is **10**, so ingest keeps the remaining connections. When the worker pool and queue are full, the request returns **503** with `Retry-After: 2` instead of running the scan on the Tomcat thread. A present `configId` uses `e.configId = :configId` so Postgres can pick `idx_se_config_ts`; omit `configId` to scan `idx_se_ts`. Category and action counts come from one `GROUP BY e.rule.category, e.action` (at most 21 buckets), then `StatsService` sums those buckets. Totals and the root average are derived from the category sums, not a fourth query. Top-N uses Spring Data `Limit.of(10)` and returns a `List` (never `Page`, which would emit a derived count query).
-
 ### Timeseries — `GET /v1/stats/timeseries`
-
-Event counts bucketed on UTC calendar intervals, for a line chart. `configId` is optional (omit to cover every configuration; the body then has `configId: null`). `from`, `to`, and `interval` are required. `interval` is one of `1m`, `5m`, `1h`. The window is the same half-open `[from, to)` on event `timestamp` as summary.
-
-Buckets sit on the UTC calendar (`1m` on each minute, `5m` on `00, 05, 10, …`, `1h` on `:00`). `timestamp` is the bucket start, including a partial first bucket whose start is before `from`. Events outside `[from, to)` are not counted. A bucket that starts exactly at `to` is omitted. Every overlapping bucket is returned in ascending order, including `count: 0`. An empty match is **200** with a zero in each bucket.
-
-The window must pass both `app.stats.max-range` (default **31d**) and the interval’s own cap: `1m` **24h**, `5m` **7d**, `1h` **31d**. Exactly on a limit is allowed. Checks run in that order on the request thread (`from` before `to`, then max-range, then the interval cap); the **400** names whichever check failed.
 
 ```bash
 curl -sS 'http://localhost:8080/v1/stats/timeseries?configId=14227&from=2026-06-01T00:00:00Z&to=2026-06-01T01:00:00Z&interval=5m'
 ```
 
-Example:
-
-```json
-{
-  "configId": 14227,
-  "interval": "5m",
-  "timeRange": { "from": "2026-06-01T00:00:00Z", "to": "2026-06-01T01:00:00Z" },
-  "points": [
-    { "timestamp": "2026-06-01T00:00:00Z", "count": 12 },
-    { "timestamp": "2026-06-01T00:05:00Z", "count": 0 }
-  ]
-}
-```
-
-One native `generate_series` query runs on the same `statsQueryExecutor` as summary and samples. A full pool returns the same **503** with `Retry-After: 2`. Present `configId` uses `idx_se_config_ts`; omit it to scan `idx_se_ts`.
-
 ### Samples — `GET /v1/events/samples`
-
-Returns individual enriched events matching optional filters, newest first. Every query parameter is optional; present filters are combined with AND. An omitted filter is left out of the `WHERE` clause.
-
-| Parameter | Meaning |
-| --- | --- |
-| `configId` | equality on `configId` |
-| `from` | `timestamp >= from` |
-| `to` | `timestamp < to` |
-| `category` | equality on `rule.category` |
-| `action` | equality on `action` |
-| `limit` | page size, default **20**, range **1..100** |
-| `offset` | skip count, default **0**, range **0..10000** |
-
-`from` and `to` are independent ISO-8601 instants with an offset. Both together are the same half-open window as stats (`[from, to)`). There is no 31-day cap. Order is `timestamp DESC, id DESC`.
-
-The `SELECT` always runs. `total` is then either inferred or counted, and never walks more than **10_100** rows (`MAX_OFFSET + MAX_LIMIT`). A default unfiltered call does not `COUNT(*)` the table.
-
-- `n < limit` (including an empty first page) → skip the count, `total = offset + n`, `totalExact: true`
-- `n == limit` or `n == 0` with `offset > 0` → `SELECT id` with the same predicates, `LIMIT 10101`
-  - `<= 10_100` rows → that count, `totalExact: true`
-  - `10_101` rows → `total: 10100`, `totalExact: false` (at least this many; nobody can page past that)
-
-`limit` and `offset` in the body are the applied values (defaults included). Empty matches return **200** with `"events": []`.
 
 ```bash
 curl -sS 'http://localhost:8080/v1/events/samples?configId=14227&from=2026-06-01T00:00:00Z&to=2026-06-02T00:00:00Z&category=INJECTION&action=DENY&limit=20&offset=0'
 ```
-
-Example:
-
-```json
-{
-  "events": [
-    {
-      "id": 2,
-      "eventId": "evt-00132",
-      "timestamp": "2026-06-01T14:32:10Z",
-      "configId": 14227,
-      "path": "/api/v1/login",
-      "action": "DENY",
-      "attackType": "SQL/Command Injection",
-      "threatScore": 75
-    }
-  ],
-  "total": 1,
-  "totalExact": true,
-  "limit": 20,
-  "offset": 0
-}
-```
-
-Domain rejects return **400** with the ingest `errors` array (`detail` is `Validation failed`). All violations are listed: `limit` outside 1..100, `offset` outside 0..10000, and both bounds present with `from >= to`. A value that does not parse (`limit=abc`, an unknown enum, an instant with no offset) keeps the shared type-mismatch body (`Invalid value for parameter '…'`, no `errors` array) and never reaches the service.
-
-The page and capped-id count run as one task on `statsQueryExecutor` and share its 6 workers and queue with stats. When the executor is full, the request returns the same **503** with `Retry-After: 2`. Present `configId` can use `idx_se_config_ts`; omit it to scan `idx_se_ts`. `category` and `action` stay unindexed. The count selects `id` and stops after 10_101 rows, so it can use those indexes instead of a full-table `COUNT(*)`.
 
 ## Architecture
 
@@ -316,11 +142,52 @@ Layered Spring Boot service: `Controller` → `Service` → `Repository` → Pos
 
 Packages: `config`, `controller`, `dto`, `model`, `repository`, `service`, `enrichment`, `exception`, `generator`.
 
-A diagram will be added once ingestion, enrichment, and analytics APIs are in place.
+```mermaid
+flowchart TD
+  clients["Clients: curl, demo page, CLI"]
+
+  clients --> eventController["EventController<br/>POST /v1/events/ingest"]
+  clients --> statsController["StatsController<br/>GET /v1/stats/summary<br/>GET /v1/stats/timeseries"]
+  clients --> samplesController["SamplesController<br/>GET /v1/events/samples"]
+  clients --> devController["DevEventsController<br/>GET /v1/dev/events"]
+
+  eventController --> eventService["SecurityEventService"]
+  eventService --> enrich["Classify and score"]
+  enrich --> repo["SecurityEventRepository"]
+
+  statsController --> statsService["StatsService"]
+  samplesController --> samplesService["SamplesService"]
+  statsService --> repo
+  samplesService --> repo
+
+  devController --> generator["EventGenerator — not stored"]
+
+  repo --> db[("PostgreSQL")]
+```
+
+Ingest writes `attackType`, `threatScore`, and `receivedAt` before `saveAll`.
 
 ## Storage justification
 
-PostgreSQL is the primary store: relational queries, JPQL aggregations for stats, and composite indexes `(config_id, event_timestamp, id)`, `(event_timestamp, id)`, and `(client_ip, event_timestamp)` keep time-bounded scans and the ingest repeat-offender check efficient at assignment scale. `path` is deliberately **not** indexed — top-path `GROUP BY` runs after the time-range filter. H2 is used for ingest API tests; stats summary and samples pagination are proven against Postgres via Testcontainers.
+why PostgreSQL
+
+Every query here has the same shape: filter by config and time range, then group and count. PostgreSQL handles that well at this scale. It also gives me for free:
+- a unique `event_id` constraint, which rejects duplicates with 409
+- transactions, so a batch is written all-or-nothing
+- SQL aggregation, so stats are computed in the database instead of in Java
+
+**Indexes** put the equality column first and the time range second:
+- `(config_id, event_timestamp, id)` and `(event_timestamp, id)` serve summary and samples, with and without `configId`. Because they're already time-ordered, a `DESC LIMIT` page needs no sort, and `id` keeps pagination stable when timestamps collide.
+- `(client_ip, event_timestamp)` serves the repeat-offender check at ingest.
+
+**Not indexed, on purpose:**
+- `path` is only grouped after the time filter has already narrowed the rows.
+- `action` and `category` have too few distinct values for an index to help.
+- Every extra index slows inserts.
+
+**Testing:** ingest tests run on H2 for speed. Stats and samples pagination run against real Postgres via Testcontainers, because their results depend on Postgres aggregation and ordering behavior.
+
+**At real scale**, stats cost grows with the number of events in the range. The next steps would be time partitioning, then rollups (or TimescaleDB continuous aggregates), then a columnar store like ClickHouse. Only the repository layer would change.
 
 ## Git tags / milestones
 
@@ -334,18 +201,25 @@ PostgreSQL is the primary store: relational queries, JPQL aggregations for stats
 | `v0.5-generator` | Seeded event generator, CLI, demo page, `GET /v1/dev/events` |
 | `v0.6-timeseries` | `GET /v1/stats/timeseries` (UTC calendar buckets) |
 
+## Challenges and how they were solved
+- Repeat offender detection inside a bulk batch: 
+what was the problem: detecting repeat in a naive approach (COUNT against the db) can miss a repeat offender as it doesn't check against the events in the input array and doesn't store at the db yet.
+what was the solution: the count combines two sources: matching events already stored in the database, and earlier same IP events in the current batch, counted in memory. The window is inclusive `[timestamp − 10 minutes, timestamp]`. 
+
+- Repeat offender cost grew with the noisiest IPs:
+what was the problem: each IP's timestamps were loaded over one wide window and rescanned for every event, so the busiest IPs (the actual attack waves) were the slowest to score.
+what was the solution: the query returns timestamps sorted, so each event's count is a binary search, and the window is computed per IP so one old event doesn't widen the read for everyone.
+
+- Batch inserts were silently row by row:
+what was the problem: with IDENTITY id generation, Hibernate needs each id back right after the insert, which disables JDBC batching, so a 1,000 event batch meant 1,000 round trips to the db.
+what was the solution: switched to a pooled sequence (allocation size 50) with Hibernate batching enabled, so ids are pre-allocated in memory and the inserts go out in batches.
+
 ## What I’d improve given more time
 
-- Per-event SQL counts for the repeat-offender window, then a Redis sliding window at real scale. History is already one OR-of-windows query; those steps drop the timestamp materialization.
-- Partitioning `security_events` by `event_timestamp` cannot keep a global `UNIQUE(event_id)`: Postgres unique keys on partitions must include the partition column, so the same `eventId` could be inserted again at another timestamp and **409** would no longer hold. A retention job would drop old rows and weaken 409 after the retention window. The spec does not ask for either.
+- Repeat offender check at scale:
+today the check queries the db, and it gets slower the more events an IP sends. at scale i'd send events through Kafka keyed by clientIp, so each IP always lands on the same consumer, and keep a simple per-IP count of the last 10 minutes in memory there. no db lookup, same cost for every event.
 
-## Challenges and how they were solved
+- Pre-aggregation for stats: stats count every raw event in the range, so they slow down as data grows. i'd keep hourly totals per config, category and action, updated on ingest, and only count raw events for the partial hours at the edges.
 
-_TBD after implementation._
+- Async ingestion: put a queue (Kafka) between the API and the db, so traffic spikes don't hit the db directly.
 
-## Bonus ideas
-
-Not in scope for `v0.0-infrastructure`:
-
-- Alerting: `POST /v1/alerts/define`, `GET /v1/alerts/evaluate`
-- Rate limiting on stats/samples APIs (429)

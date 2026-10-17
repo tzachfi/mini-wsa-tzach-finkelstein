@@ -1,9 +1,15 @@
 package com.akamai.miniwsa.dto;
 
 import com.fasterxml.jackson.annotation.JsonValue;
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.Duration;
 import java.util.Arrays;
 
+@Schema(
+        description = "UTC calendar bucket size",
+        type = "string",
+        allowableValues = {"1m", "5m", "1h"},
+        example = "5m")
 public enum TimeSeriesInterval {
     ONE_MINUTE("1m", Duration.ofHours(24), 60),
     FIVE_MINUTES("5m", Duration.ofDays(7), 300),
