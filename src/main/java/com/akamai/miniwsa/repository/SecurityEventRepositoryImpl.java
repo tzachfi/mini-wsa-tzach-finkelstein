@@ -52,13 +52,13 @@ public class SecurityEventRepositoryImpl implements SecurityEventRepositoryCusto
     }
 
     @Override
-    public long countMatching(SampleFilter filter) {
+    public long countMatching(SampleFilter filter, int cap) {
         var cb = entityManager.getCriteriaBuilder();
         var query = cb.createQuery(Long.class);
         var event = query.from(SecurityEvent.class);
-        query.select(cb.count(event));
+        query.select(event.get("id"));
         applyFilter(cb, query, event, filter);
-        return entityManager.createQuery(query).getSingleResult();
+        return entityManager.createQuery(query).setMaxResults(cap + 1).getResultList().size();
     }
 
     private static void applyFilter(

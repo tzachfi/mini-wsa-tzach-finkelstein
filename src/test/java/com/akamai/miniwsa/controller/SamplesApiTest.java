@@ -55,6 +55,7 @@ class SamplesApiTest {
         mockMvc.perform(get(SAMPLES_URL))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.totalExact").value(true))
                 .andExpect(jsonPath("$.limit").value(20))
                 .andExpect(jsonPath("$.offset").value(0))
                 .andExpect(jsonPath("$.events", hasSize(2)))
@@ -73,17 +74,20 @@ class SamplesApiTest {
         mockMvc.perform(get(SAMPLES_URL).param("from", FROM).param("to", TO))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.totalExact").value(true))
                 .andExpect(jsonPath("$.events[*].eventId").value(contains("evt-mid", "evt-from")));
 
         mockMvc.perform(get(SAMPLES_URL).param("from", FROM))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(4))
+                .andExpect(jsonPath("$.totalExact").value(true))
                 .andExpect(jsonPath("$.events[*].eventId")
                         .value(contains("evt-after", "evt-to", "evt-mid", "evt-from")));
 
         mockMvc.perform(get(SAMPLES_URL).param("to", TO))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalExact").value(true))
                 .andExpect(jsonPath("$.events[*].eventId")
                         .value(contains("evt-mid", "evt-from", "evt-before")));
     }
@@ -101,6 +105,7 @@ class SamplesApiTest {
                         .param("action", "DENY"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.totalExact").value(true))
                 .andExpect(jsonPath("$.events", hasSize(1)))
                 .andExpect(jsonPath("$.events[0].eventId").value("evt-match"))
                 .andExpect(jsonPath("$.events[0].attackType").value("SQL/Command Injection"));
@@ -115,6 +120,7 @@ class SamplesApiTest {
         mockMvc.perform(get(SAMPLES_URL).param("limit", "2").param("offset", "2"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalExact").value(true))
                 .andExpect(jsonPath("$.limit").value(2))
                 .andExpect(jsonPath("$.offset").value(2))
                 .andExpect(jsonPath("$.events", hasSize(1)))
@@ -130,6 +136,7 @@ class SamplesApiTest {
         mockMvc.perform(get(SAMPLES_URL).param("offset", "100"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalExact").value(true))
                 .andExpect(jsonPath("$.limit").value(20))
                 .andExpect(jsonPath("$.offset").value(100))
                 .andExpect(jsonPath("$.events", hasSize(0)));

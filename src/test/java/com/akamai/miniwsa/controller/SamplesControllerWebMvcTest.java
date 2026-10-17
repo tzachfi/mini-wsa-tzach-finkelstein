@@ -41,7 +41,7 @@ class SamplesControllerWebMvcTest {
     @BeforeEach
     void stubService() {
         when(samplesService.sample(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-                .thenReturn(new SamplesResponse(List.of(), 0L, 20, 0));
+                .thenReturn(new SamplesResponse(List.of(), 0L, true, 20, 0));
     }
 
     @Test

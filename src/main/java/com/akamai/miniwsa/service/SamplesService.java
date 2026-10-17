@@ -35,13 +35,21 @@ public class SamplesService {
         var page = securityEventRepository.findPage(filter, offset, limit);
         var n = page.size();
         long total;
+        boolean totalExact;
         if (n == limit || (n == 0 && offset > 0)) {
-            total = securityEventRepository.countMatching(filter);
+            var counted = securityEventRepository.countMatching(filter, SamplesPaging.COUNT_CAP);
+            totalExact = counted <= SamplesPaging.COUNT_CAP;
+            total = totalExact ? counted : SamplesPaging.COUNT_CAP;
         } else {
             total = (long) offset + n;
+            totalExact = true;
         }
         return new SamplesResponse(
-                page.stream().map(EventResponseMapper::toResponse).toList(), total, limit, offset);
+                page.stream().map(EventResponseMapper::toResponse).toList(),
+                total,
+                totalExact,
+                limit,
+                offset);
     }
 
     private static <T> T join(CompletableFuture<T> future) {

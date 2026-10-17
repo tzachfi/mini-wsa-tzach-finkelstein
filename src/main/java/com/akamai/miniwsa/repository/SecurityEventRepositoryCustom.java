@@ -13,5 +13,5 @@ public interface SecurityEventRepositoryCustom {
 
     List<SecurityEvent> findPage(SampleFilter filter, int offset, int limit);
 
-    long countMatching(SampleFilter filter);
+    long countMatching(SampleFilter filter, int cap);
 }

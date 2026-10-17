@@ -1,6 +1,7 @@
 package com.akamai.miniwsa.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -49,7 +50,8 @@ class SamplesServiceTest {
         assertEquals(2, response.total());
         assertEquals(20, response.limit());
         assertEquals(0, response.offset());
-        verify(securityEventRepository, never()).countMatching(any());
+        assertTrue(response.totalExact());
+        verify(securityEventRepository, never()).countMatching(any(), anyInt());
     }
 
     @Test
@@ -60,33 +62,50 @@ class SamplesServiceTest {
 
         assertTrue(response.events().isEmpty());
         assertEquals(0, response.total());
-        verify(securityEventRepository, never()).countMatching(any());
+        assertTrue(response.totalExact());
+        verify(securityEventRepository, never()).countMatching(any(), anyInt());
     }
 
     @Test
     void fullPageRunsCountAndUsesThatTotal() {
         when(securityEventRepository.findPage(EMPTY_FILTER, 0, 2)).thenReturn(List.of(event(1), event(2)));
-        when(securityEventRepository.countMatching(EMPTY_FILTER)).thenReturn(10L);
+        when(securityEventRepository.countMatching(EMPTY_FILTER, SamplesPaging.COUNT_CAP)).thenReturn(10L);
 
         var response = samplesService.sample(null, null, null, null, null, 2, 0);
 
         assertEquals(2, response.events().size());
         assertEquals(10, response.total());
-        verify(securityEventRepository).countMatching(eq(EMPTY_FILTER));
+        assertTrue(response.totalExact());
+        verify(securityEventRepository).countMatching(eq(EMPTY_FILTER), eq(SamplesPaging.COUNT_CAP));
     }
 
     @Test
     void emptyPagePastOffsetZeroRunsCount() {
         when(securityEventRepository.findPage(EMPTY_FILTER, 100, 20)).thenReturn(List.of());
-        when(securityEventRepository.countMatching(EMPTY_FILTER)).thenReturn(5L);
+        when(securityEventRepository.countMatching(EMPTY_FILTER, SamplesPaging.COUNT_CAP)).thenReturn(5L);
 
         var response = samplesService.sample(null, null, null, null, null, 20, 100);
 
         assertTrue(response.events().isEmpty());
         assertEquals(5, response.total());
+        assertTrue(response.totalExact());
         assertEquals(20, response.limit());
         assertEquals(100, response.offset());
-        verify(securityEventRepository).countMatching(eq(EMPTY_FILTER));
+        verify(securityEventRepository).countMatching(eq(EMPTY_FILTER), eq(SamplesPaging.COUNT_CAP));
+    }
+
+    @Test
+    void fullPageCountAtCapPlusOneMarksTotalInexact() {
+        when(securityEventRepository.findPage(EMPTY_FILTER, 0, 2)).thenReturn(List.of(event(1), event(2)));
+        when(securityEventRepository.countMatching(EMPTY_FILTER, SamplesPaging.COUNT_CAP))
+                .thenReturn((long) SamplesPaging.COUNT_CAP + 1);
+
+        var response = samplesService.sample(null, null, null, null, null, 2, 0);
+
+        assertEquals(2, response.events().size());
+        assertEquals(SamplesPaging.COUNT_CAP, response.total());
+        assertFalse(response.totalExact());
+        verify(securityEventRepository).countMatching(eq(EMPTY_FILTER), eq(SamplesPaging.COUNT_CAP));
     }
 
     @Test
@@ -99,7 +118,7 @@ class SamplesServiceTest {
                 TaskRejectedException.class, () -> samplesService.sample(null, null, null, null, null, 20, 0));
 
         verify(securityEventRepository, never()).findPage(any(), anyInt(), anyInt());
-        verify(securityEventRepository, never()).countMatching(any());
+        verify(securityEventRepository, never()).countMatching(any(), anyInt());
     }
 
     private static SecurityEvent event(long id) {

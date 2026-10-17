@@ -192,11 +192,12 @@ Returns individual enriched events matching optional filters, newest first. Ever
 
 `from` and `to` are independent ISO-8601 instants with an offset. Both together are the same half-open window as stats (`[from, to)`). There is no 31-day cap. Order is `timestamp DESC, id DESC`.
 
-The `SELECT` always runs. `total` is then either inferred or counted:
+The `SELECT` always runs. `total` is then either inferred or counted, and never walks more than **10_100** rows (`MAX_OFFSET + MAX_LIMIT`). A default unfiltered call does not `COUNT(*)` the table.
 
-- `n < limit` (including an empty first page) → skip the count, `total = offset + n`
-- `n == limit` → run `COUNT` with the same predicates
-- `n == 0` and `offset > 0` → run `COUNT`; `events` stays `[]`
+- `n < limit` (including an empty first page) → skip the count, `total = offset + n`, `totalExact: true`
+- `n == limit` or `n == 0` with `offset > 0` → `SELECT id` with the same predicates, `LIMIT 10101`
+  - `<= 10_100` rows → that count, `totalExact: true`
+  - `10_101` rows → `total: 10100`, `totalExact: false` (at least this many; nobody can page past that)
 
 `limit` and `offset` in the body are the applied values (defaults included). Empty matches return **200** with `"events": []`.
 
@@ -221,6 +222,7 @@ Example:
     }
   ],
   "total": 1,
+  "totalExact": true,
   "limit": 20,
   "offset": 0
 }
@@ -228,7 +230,7 @@ Example:
 
 Domain rejects return **400** with the ingest `errors` array (`detail` is `Validation failed`). All violations are listed: `limit` outside 1..100, `offset` outside 0..10000, and both bounds present with `from >= to`. A value that does not parse (`limit=abc`, an unknown enum, an instant with no offset) keeps the shared type-mismatch body (`Invalid value for parameter '…'`, no `errors` array) and never reaches the service.
 
-The page and count queries run as one task on `statsQueryExecutor` and share its 6 workers and queue with stats. When the executor is full, the request returns the same **503** with `Retry-After: 2`. Present `configId` can use `idx_se_config_ts`; omit it to scan `idx_se_ts`. `category` and `action` stay unindexed.
+The page and capped-id count run as one task on `statsQueryExecutor` and share its 6 workers and queue with stats. When the executor is full, the request returns the same **503** with `Retry-After: 2`. Present `configId` can use `idx_se_config_ts`; omit it to scan `idx_se_ts`. `category` and `action` stay unindexed. The count selects `id` and stops after 10_101 rows, so it can use those indexes instead of a full-table `COUNT(*)`.
 
 ## Architecture
 

@@ -4,6 +4,7 @@ import com.akamai.miniwsa.dto.SamplesResponse;
 import com.akamai.miniwsa.exception.EventValidationException;
 import com.akamai.miniwsa.model.Action;
 import com.akamai.miniwsa.model.RuleCategory;
+import com.akamai.miniwsa.service.SamplesPaging;
 import com.akamai.miniwsa.service.SamplesService;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -30,11 +31,13 @@ public class SamplesController {
             @RequestParam(defaultValue = "20") int limit,
             @RequestParam(defaultValue = "0") int offset) {
         var errors = new ArrayList<EventValidationException.FieldError>();
-        if (limit < 1 || limit > 100) {
-            errors.add(new EventValidationException.FieldError("limit", "must be between 1 and 100"));
+        if (limit < 1 || limit > SamplesPaging.MAX_LIMIT) {
+            errors.add(new EventValidationException.FieldError(
+                    "limit", "must be between 1 and " + SamplesPaging.MAX_LIMIT));
         }
-        if (offset < 0 || offset > 10_000) {
-            errors.add(new EventValidationException.FieldError("offset", "must be between 0 and 10000"));
+        if (offset < 0 || offset > SamplesPaging.MAX_OFFSET) {
+            errors.add(new EventValidationException.FieldError(
+                    "offset", "must be between 0 and " + SamplesPaging.MAX_OFFSET));
         }
         if (from != null && to != null && !from.isBefore(to)) {
             errors.add(new EventValidationException.FieldError("from", "'from' must be before 'to'"));
