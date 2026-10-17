@@ -52,7 +52,7 @@ APP_PORT=18080 docker compose up --build
 
 Make aliases: `make up`, `make down`, `make logs`.
 
-The demo page is [http://localhost:8080/](http://localhost:8080/). **Generate and ingest** calls `GET /v1/dev/events`, then posts each chunk to ingest. **Download JSON (no ingest)** is that same GET only — nothing is stored. **Load stats summary** and **Load samples** call `GET /v1/stats/summary` and `GET /v1/events/samples` on the last ingest window (or the last 24 hours).
+The demo page is [http://localhost:8080/](http://localhost:8080/). **Generate and ingest** calls `GET /v1/dev/events`, then posts each chunk to ingest, then draws `GET /v1/stats/timeseries` as a Chart.js line chart. **Download JSON (no ingest)** is that same GET only — nothing is stored. **Load stats summary**, **Load samples**, and **Load timeseries** call `GET /v1/stats/summary`, `GET /v1/events/samples`, and `GET /v1/stats/timeseries` on the last ingest window (or the last 24 hours). The chart uses Chart.js 4 from jsDelivr (`5m` buckets by default).
 
 ### Generate a JSON file (CLI)
 
@@ -226,6 +226,34 @@ Example:
 
 Three JPQL aggregations (category×action, top attackers, top paths) run in parallel, so latency is the slowest query rather than the sum; that triples concurrent database load per request and helps latency, not throughput. The three scans share `app.stats.query-threads` workers (default **6**) and a queue of `app.stats.query-queue-capacity` (default **6**) with samples. Hikari’s `maximum-pool-size` is **10**, so ingest keeps the remaining connections. When the worker pool and queue are full, the request returns **503** with `Retry-After: 2` instead of running the scan on the Tomcat thread. A present `configId` uses `e.configId = :configId` so Postgres can pick `idx_se_config_ts`; omit `configId` to scan `idx_se_ts`. Category and action counts come from one `GROUP BY e.rule.category, e.action` (at most 21 buckets), then `StatsService` sums those buckets. Totals and the root average are derived from the category sums, not a fourth query. Top-N uses Spring Data `Limit.of(10)` and returns a `List` (never `Page`, which would emit a derived count query).
 
+### Timeseries — `GET /v1/stats/timeseries`
+
+Event counts bucketed on UTC calendar intervals, for a line chart. `configId` is optional (omit to cover every configuration; the body then has `configId: null`). `from`, `to`, and `interval` are required. `interval` is one of `1m`, `5m`, `1h`. The window is the same half-open `[from, to)` on event `timestamp` as summary.
+
+Buckets sit on the UTC calendar (`1m` on each minute, `5m` on `00, 05, 10, …`, `1h` on `:00`). `timestamp` is the bucket start, including a partial first bucket whose start is before `from`. Events outside `[from, to)` are not counted. A bucket that starts exactly at `to` is omitted. Every overlapping bucket is returned in ascending order, including `count: 0`. An empty match is **200** with a zero in each bucket.
+
+The window must pass both `app.stats.max-range` (default **31d**) and the interval’s own cap: `1m` **24h**, `5m` **7d**, `1h` **31d**. Exactly on a limit is allowed. Checks run in that order on the request thread (`from` before `to`, then max-range, then the interval cap); the **400** names whichever check failed.
+
+```bash
+curl -sS 'http://localhost:8080/v1/stats/timeseries?configId=14227&from=2026-06-01T00:00:00Z&to=2026-06-01T01:00:00Z&interval=5m'
+```
+
+Example:
+
+```json
+{
+  "configId": 14227,
+  "interval": "5m",
+  "timeRange": { "from": "2026-06-01T00:00:00Z", "to": "2026-06-01T01:00:00Z" },
+  "points": [
+    { "timestamp": "2026-06-01T00:00:00Z", "count": 12 },
+    { "timestamp": "2026-06-01T00:05:00Z", "count": 0 }
+  ]
+}
+```
+
+One native `generate_series` query runs on the same `statsQueryExecutor` as summary and samples. A full pool returns the same **503** with `Retry-After: 2`. Present `configId` uses `idx_se_config_ts`; omit it to scan `idx_se_ts`.
+
 ### Samples — `GET /v1/events/samples`
 
 Returns individual enriched events matching optional filters, newest first. Every query parameter is optional; present filters are combined with AND. An omitted filter is left out of the `WHERE` clause.
@@ -304,6 +332,7 @@ PostgreSQL is the primary store: relational queries, JPQL aggregations for stats
 | `v0.3-stats` | `GET /v1/stats/summary` (JPQL aggregations) |
 | `v0.4-samples` | `GET /v1/events/samples` pagination and filters |
 | `v0.5-generator` | Seeded event generator, CLI, demo page, `GET /v1/dev/events` |
+| `v0.6-timeseries` | `GET /v1/stats/timeseries` (UTC calendar buckets) |
 
 ## What I’d improve given more time
 
@@ -319,5 +348,4 @@ _TBD after implementation._
 Not in scope for `v0.0-infrastructure`:
 
 - Alerting: `POST /v1/alerts/define`, `GET /v1/alerts/evaluate`
-- Time-series: `GET /v1/stats/timeseries`
 - Rate limiting on stats/samples APIs (429)
