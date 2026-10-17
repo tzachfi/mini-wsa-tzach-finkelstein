@@ -11,7 +11,10 @@ RUN ./mvnw -q -B -DskipTests package
 FROM eclipse-temurin:21-jre AS runtime
 WORKDIR /app
 
-RUN groupadd --system app && useradd --system --gid app app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system app && useradd --system --gid app app
 COPY --from=builder /workspace/target/mini-wsa-*.jar /app/app.jar
 RUN chown app:app /app/app.jar
 

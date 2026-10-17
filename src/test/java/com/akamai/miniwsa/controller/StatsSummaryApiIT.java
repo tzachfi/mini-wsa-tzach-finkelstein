@@ -22,8 +22,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@Testcontainers
-class StatsSummaryApiTest {
+@Testcontainers(disabledWithoutDocker = true)
+class StatsSummaryApiIT {
 
     private static final String INGEST_URL = "/v1/events/ingest";
     private static final String SUMMARY_URL = "/v1/stats/summary";

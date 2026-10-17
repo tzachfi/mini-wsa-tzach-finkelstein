@@ -22,8 +22,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@Testcontainers
-class SamplesApiTest {
+@Testcontainers(disabledWithoutDocker = true)
+class SamplesApiIT {
 
     private static final String INGEST_URL = "/v1/events/ingest";
     private static final String SAMPLES_URL = "/v1/events/samples";
