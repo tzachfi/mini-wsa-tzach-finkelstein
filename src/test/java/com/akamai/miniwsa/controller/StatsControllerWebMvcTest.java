@@ -81,6 +81,23 @@ class StatsControllerWebMvcTest {
                         "range over max",
                         get("/v1/stats/summary")
                                 .param("from", "2026-06-01T00:00:00Z")
-                                .param("to", "2026-07-02T00:00:01Z")));
+                                .param("to", "2026-07-02T00:00:01Z")),
+                Arguments.of(
+                        "timeseries missing interval",
+                        get("/v1/stats/timeseries")
+                                .param("from", "2026-06-01T00:00:00Z")
+                                .param("to", "2026-06-02T00:00:00Z")),
+                Arguments.of(
+                        "timeseries unknown interval",
+                        get("/v1/stats/timeseries")
+                                .param("from", "2026-06-01T00:00:00Z")
+                                .param("to", "2026-06-02T00:00:00Z")
+                                .param("interval", "2m")),
+                Arguments.of(
+                        "timeseries 1m over 24h",
+                        get("/v1/stats/timeseries")
+                                .param("from", "2026-06-01T00:00:00Z")
+                                .param("to", "2026-06-02T00:00:01Z")
+                                .param("interval", "1m")));
     }
 }
