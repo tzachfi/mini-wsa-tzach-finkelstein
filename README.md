@@ -37,92 +37,50 @@ GitHub Actions (`.github/workflows/ci.yml`) runs `./mvnw -B verify` on pushes to
 
 ## How to build & run
 
-### Local (Maven + Postgres)
+`docker compose up --build` at the top is the full stack. Use the steps below to run the app from Maven, run tests, or change a port.
 
-`./mvnw spring-boot:run` uses `localhost:5432` from `application.yml` (override with `DB_URL`). Compose Postgres is internal-only unless you opt in:
+### App from Maven
+
+Postgres on `localhost:5432`, database/user/password `miniwsa`. `make db` starts that database and publishes the port (`DB_PORT` to use another one).
 
 ```bash
 make db
 ./mvnw spring-boot:run
 ```
 
-`make db` publishes `${DB_PORT:-5432}` via `docker-compose.db.yml`. Use any Postgres with database/user/password `miniwsa`. `psql` from the host is `docker compose exec postgres psql -U miniwsa -d miniwsa`.
+The API is at [http://localhost:8080](http://localhost:8080/). `DB_URL` points the app at a different database. SQL shell: `docker compose exec postgres psql -U miniwsa -d miniwsa`.
+
+### Tests
 
 ```bash
 ./mvnw verify
 ```
 
-Postgres integration tests (`*IT`) need Docker and are skipped without it. `./mvnw package` runs unit tests only and needs a JDK.
+That includes the Postgres integration tests (`*IT`) when Docker is available. `./mvnw package` runs the unit tests only.
 
-The API listens on `http://localhost:8080`.
+### Full stack switches
 
-### Full stack (Docker Compose)
-
-```bash
-docker compose up --build
-```
-
-To run the demo again from a clean database (seeded `eventId`s return 409 otherwise):
-
-```bash
-docker compose down -v
-```
-
-Postgres stays on the Compose network only (`postgres:5432`). The host mapping that used to fail when 5432 was already allocated is gone. The app still publishes **8080**. If that port is taken:
+Postgres stays on the Compose network at `postgres:5432`. The app publishes **8080**. Another host port:
 
 ```bash
 APP_PORT=18080 docker compose up --build
 ```
 
-Make aliases: `make up`, `make down`, `make logs`, `make db`.
-
-The demo page is [http://localhost:8080/](http://localhost:8080/). **Generate and ingest** calls `GET /v1/dev/events`, then posts each chunk to ingest, then draws `GET /v1/stats/timeseries` as a Chart.js line chart. **Download JSON (no ingest)** is that same GET only — nothing is stored. **Load stats summary**, **Load samples**, and **Load timeseries** call `GET /v1/stats/summary`, `GET /v1/events/samples`, and `GET /v1/stats/timeseries` on the last ingest window (or the last 24 hours). The chart uses Chart.js 4 from jsDelivr (`5m` buckets by default).
-
-### Generate a JSON file (CLI)
-
-The generator has no Spring dependencies. Same `--seed` and `--end` produce byte-identical output. Default seed is **42**. Progress and the attacker summary go to stderr; the JSON array goes to stdout or `-o`.
+Seeded `eventId`s already stored return 409. Wipe the database and start over:
 
 ```bash
-./mvnw -q compile exec:java -Dexec.args='--count 10000 --seed 42 --span 24h --end 2026-06-02T00:00:00Z -o events.json'
+docker compose down -v
 ```
 
-Load a file at or under the live ingest cap (default **1000**, override with `APP_INGEST_MAX_BATCH_SIZE`):
+Shortcuts: `make up`, `make down`, `make logs`, `make db`.
 
-```bash
-curl -sS -X POST http://localhost:8080/v1/events/ingest \
-  -H 'Content-Type: application/json' \
-  --data-binary @events.json
-```
+The demo page is [http://localhost:8080/](http://localhost:8080/).
 
-Larger files must be sliced. Read the cap from `X-Max-Batch-Size` (do not assume 1000):
+- **Generate and ingest** fetches events from `GET /v1/dev/events`, posts them to ingest in chunks, then draws the result of `GET /v1/stats/timeseries` as a line chart.
+- **Download JSON (no ingest)** is the same GET. The file is saved locally and nothing is stored.
+- **Load stats summary**, **Load samples**, and **Load timeseries** read `GET /v1/stats/summary`, `GET /v1/events/samples`, and `GET /v1/stats/timeseries`. They use the window from the last ingest, or the last 24 hours when nothing has been ingested yet.
 
-```bash
-CAP=$(curl -sS -D - -o /tmp/events.json \
-  'http://localhost:8080/v1/dev/events?count=10000&seed=42&span=24h&end=2026-06-02T00:00:00Z' \
-  | awk 'tolower($1)=="x-max-batch-size:" {print $2}' | tr -d '\r')
-i=0
-len=$(jq 'length' /tmp/events.json)
-while [ "$i" -lt "$len" ]; do
-  jq -c ".[$i:$((i + CAP))]" /tmp/events.json \
-    | curl -sS -X POST http://localhost:8080/v1/events/ingest \
-        -H 'Content-Type: application/json' \
-        --data-binary @-
-  i=$((i + CAP))
-done
-```
-
-## Sample data (assignment Part 5)
-
-| Part 5 need | Where it lives |
-| --- | --- |
-| Realistic mix of categories, actions, and paths | Weighted background events plus pinned attack waves |
-| Repeat-offender / campaign waves | Showcase IPs `203.0.113.10`–`.12` and ~20% returning wave IPs |
-| Reproducible dataset | Seeded RNG; `eventId` is `evt-s{seed}-{index}` |
-| Configurable volume | `--count` / page count (CLI and GET: 148–100000; page caps at 20000) |
-| Load through the real ingest API | Demo page chunks on `X-Max-Batch-Size`; CLI writes a file for curl |
-| Demo without extra Compose services | Static `index.html` on `:8080` |
-
-A default 10k-event run has 50 wave IPs. Ranks 1–3 of `topAttackers` are always 40, 36, then 30 events (`203.0.113.10` two bursts on `/admin/users`, `.11` one burst on `/api/v1/login`, `.12` two bursts on `/api/v1/login`). `topTargetedPaths` starts at `/api/v1/login` (66) then `/admin/users` (40). Background IPs stay at most 4 events so they never enter the top 10.
+The chart uses Chart.js 4 from jsDelivr, with `5m` buckets by default.
 
 ## API docs
 
@@ -246,3 +204,49 @@ today the check queries the db, and it gets slower the more events an IP sends. 
 - Pre-aggregation for stats: stats count every raw event in the range, so they slow down as data grows. i'd keep hourly totals per config, category and action, updated on ingest, and only count raw events for the partial hours at the edges.
 
 - Async ingestion: put a queue (Kafka) between the API and the db, so traffic spikes don't hit the db directly.
+
+## Generate a JSON file (CLI)
+
+The generator has no Spring dependencies. Same `--seed` and `--end` produce byte-identical output. Default seed is **42**. Progress and the attacker summary go to stderr; the JSON array goes to stdout or `-o`.
+
+```bash
+./mvnw -q compile exec:java -Dexec.args='--count 10000 --seed 42 --span 24h --end 2026-06-02T00:00:00Z -o events.json'
+```
+
+Load a file at or under the live ingest cap (default **1000**, override with `APP_INGEST_MAX_BATCH_SIZE`):
+
+```bash
+curl -sS -X POST http://localhost:8080/v1/events/ingest \
+  -H 'Content-Type: application/json' \
+  --data-binary @events.json
+```
+
+Larger files must be sliced. Read the cap from `X-Max-Batch-Size` (do not assume 1000):
+
+```bash
+CAP=$(curl -sS -D - -o /tmp/events.json \
+  'http://localhost:8080/v1/dev/events?count=10000&seed=42&span=24h&end=2026-06-02T00:00:00Z' \
+  | awk 'tolower($1)=="x-max-batch-size:" {print $2}' | tr -d '\r')
+i=0
+len=$(jq 'length' /tmp/events.json)
+while [ "$i" -lt "$len" ]; do
+  jq -c ".[$i:$((i + CAP))]" /tmp/events.json \
+    | curl -sS -X POST http://localhost:8080/v1/events/ingest \
+        -H 'Content-Type: application/json' \
+        --data-binary @-
+  i=$((i + CAP))
+done
+```
+
+## Sample data (assignment Part 5)
+
+| Part 5 need | Where it lives |
+| --- | --- |
+| Realistic mix of categories, actions, and paths | Weighted background events plus pinned attack waves |
+| Repeat-offender / campaign waves | Showcase IPs `203.0.113.10`–`.12` and ~20% returning wave IPs |
+| Reproducible dataset | Seeded RNG; `eventId` is `evt-s{seed}-{index}` |
+| Configurable volume | `--count` / page count (CLI and GET: 148–100000; page caps at 20000) |
+| Load through the real ingest API | Demo page chunks on `X-Max-Batch-Size`; CLI writes a file for curl |
+| Demo without extra Compose services | Static `index.html` on `:8080` |
+
+A default 10k-event run has 50 wave IPs. Ranks 1–3 of `topAttackers` are always 40, 36, then 30 events (`203.0.113.10` two bursts on `/admin/users`, `.11` one burst on `/api/v1/login`, `.12` two bursts on `/api/v1/login`). `topTargetedPaths` starts at `/api/v1/login` (66) then `/admin/users` (40). Background IPs stay at most 4 events so they never enter the top 10.
